@@ -1,0 +1,17 @@
+GY-61 DXL335 3-Axis Accelerometer Module Info
+GY-61 DXL335 3-Axis Accelerometer Module is a three axis accelerometer sensor module based on ADXL335 integrated circuit. The ADXL335 is a triple axis accelerometer with extremely low noise and power consumption. The sensor has a full sensing range of +/-3g. It can measure the static acceleration of gravity in tilt-sensing applications, as well as dynamic acceleration resulting from motion, shock, or vibration.
+
+There is an on-board 3.3V voltage regulator to power the ADXL335 so power provided should be between 3.3V and 6V DC.
+
+ 
+
+GY-61 DXL335 3-Axis Accelerometer Module - General Specifications
+ADXL335 3-axis Accelerometer
+On-board 3.3V Voltage Regulator
+Analog voltage output centered at 1.65V
+Suitable for connection to 5V and 3.3V systems
+ 
+GY-61 DXL335 3-Axis Accelerometer Module - Technical Specifications
+Supply Voltage: 3V - 5V
+Full scale range: +/-3g
+Sensitivity: 300mV/g (Typ)
