@@ -1,62 +1,43 @@
-#include "I2Cdev.h"
-#include "MPU6050.h"
-#include "Wire.h"
+#include <MPU6050_tockn.h>
+#include <Wire.h>
 
-MPU6050 accelgyro;
+MPU6050 mpu6050(Wire);
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
-
-#define OUTPUT_READABLE_ACCELGYRO
-//#define OUTPUT_BINARY_ACCELGYRO
-
-#define LED_PIN 13
-bool blinkState = false;
+long timer = 0;
 
 void setup() {
+  Serial.begin(9600);
   Wire.begin();
-
-  Serial.begin(38400);
-
-  // initialize device
-  Serial.println("Initializing I2C devices...");
-  accelgyro.initialize();
-  // verify connection
-  Serial.println("Testing device connections...");
-  Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
-
-  pinMode(LED_PIN, OUTPUT);
+  mpu6050.begin();
+  mpu6050.calcGyroOffsets(true);
 }
 
 void loop() {
-  accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  mpu6050.update();
 
-    // these methods (and a few others) are also available
-    //accelgyro.getAcceleration(&ax, &ay, &az);
-    //accelgyro.getRotation(&gx, &gy, &gz);
-
-    #ifdef OUTPUT_READABLE_ACCELGYRO
-        // display tab-separated accel/gyro x/y/z values
-        Serial.print("a/g:\t");
-        Serial.print(ax); Serial.print("\t");
-        Serial.print(ay); Serial.print("\t");
-        Serial.print(az); Serial.print("\t");
-        Serial.print(gx); Serial.print("\t");
-        Serial.print(gy); Serial.print("\t");
-        Serial.println(gz);
-    #endif
-
-    #ifdef OUTPUT_BINARY_ACCELGYRO
-        Serial.write((uint8_t)(ax >> 8)); Serial.write((uint8_t)(ax & 0xFF));
-        Serial.write((uint8_t)(ay >> 8)); Serial.write((uint8_t)(ay & 0xFF));
-        Serial.write((uint8_t)(az >> 8)); Serial.write((uint8_t)(az & 0xFF));
-        Serial.write((uint8_t)(gx >> 8)); Serial.write((uint8_t)(gx & 0xFF));
-        Serial.write((uint8_t)(gy >> 8)); Serial.write((uint8_t)(gy & 0xFF));
-        Serial.write((uint8_t)(gz >> 8)); Serial.write((uint8_t)(gz & 0xFF));
-    #endif
-
-    // blink LED to indicate activity
-    blinkState = !blinkState;
-    digitalWrite(LED_PIN, blinkState);
-    delay(100);
+  if(millis() - timer > 1000){
+    
+    Serial.println("=======================================================");
+    Serial.print("temp : ");Serial.println(mpu6050.getTemp());
+    Serial.print("accX : ");Serial.print(mpu6050.getAccX());
+    Serial.print("\taccY : ");Serial.print(mpu6050.getAccY());
+    Serial.print("\taccZ : ");Serial.println(mpu6050.getAccZ());
+  
+    Serial.print("gyroX : ");Serial.print(mpu6050.getGyroX());
+    Serial.print("\tgyroY : ");Serial.print(mpu6050.getGyroY());
+    Serial.print("\tgyroZ : ");Serial.println(mpu6050.getGyroZ());
+  
+    Serial.print("accAngleX : ");Serial.print(mpu6050.getAccAngleX());
+    Serial.print("\taccAngleY : ");Serial.println(mpu6050.getAccAngleY());
+  
+    Serial.print("gyroAngleX : ");Serial.print(mpu6050.getGyroAngleX());
+    Serial.print("\tgyroAngleY : ");Serial.print(mpu6050.getGyroAngleY());
+    Serial.print("\tgyroAngleZ : ");Serial.println(mpu6050.getGyroAngleZ());
+    
+    Serial.print("angleX : ");Serial.print(mpu6050.getAngleX());
+    Serial.print("\tangleY : ");Serial.print(mpu6050.getAngleY());
+    Serial.print("\tangleZ : ");Serial.println(mpu6050.getAngleZ());
+    Serial.println("=======================================================\n");
+    timer = millis();
+  }
 }
