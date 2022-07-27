@@ -10,6 +10,8 @@ using namespace BLA;
 #include <TinyGPS.h> // GPS
 #include <MPU9250_asukiaaa.h> // IMU
 #include <Adafruit_BMP280.h> // Barometer
+#include <I2Cdev.h>
+#include <MPU9250.h>
 
 // Definitions
 #define NUM_STATES 5
@@ -19,7 +21,7 @@ using namespace BLA;
 float accelBias[2] = {0.0}; // [R,P]
 float gyroBias = 0.0; // [Y]
 float cosInitialLat;
-unsigned long previousTime, currentTime; // milliseconds
+unsigned long previousTime; // milliseconds
 float deltaTime; // seconds
 const float radiusEarth = 6378100; // metres
 
@@ -30,24 +32,25 @@ const float KNOTS2MPS = 0.514444;
 
 // Initialize Objects
 TinyGPS gps;
-MPU9250_asukiaaa IMU;
+MPU9250 IMU;
 Adafruit_BMP280 Baro;
 elapsedMillis currentTime;
 
 void setup() {
+  // Initiate Connections
   Serial.begin(115200); // For debugging
   HWSERIAL.begin(9600); // For GPS
   Wire.begin(); // For GY-91
   Wire.setSCL(16);
   Wire.setSDA(17);
-  
-  IMU.setWire(&Wire);
-  IMU.beginAccel();
-  IMU.beginGyro();
-  IMU.beginMag();
 
+  // Initialize Objects
+  IMU.initialize();
+
+  // INS Setup
   // biasCorrection();
   // getInitialStates();
+  
   previousTime = currentTime;
 }
 
@@ -57,7 +60,7 @@ void loop() {
   while( HWSERIAL.available() ){
     char c = HWSERIAL.read();
     if(gps.encode(c)){
-      newdata = true;
+      newGPSData = true;
     }
   }
 
