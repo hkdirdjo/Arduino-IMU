@@ -10,8 +10,7 @@ using namespace BLA;
 #include <TinyGPS.h> // GPS
 #include <MPU9250_asukiaaa.h> // IMU
 #include <Adafruit_BMP280.h> // Barometer
-#include <I2Cdev.h>
-#include <MPU9250.h>
+#include <MadgwickAHRS.h>
 
 // Definitions
 #define NUM_STATES 5
@@ -32,7 +31,6 @@ const float KNOTS2MPS = 0.514444;
 
 // Initialize Objects
 TinyGPS gps;
-MPU9250 IMU;
 Adafruit_BMP280 Baro;
 elapsedMillis currentTime;
 
