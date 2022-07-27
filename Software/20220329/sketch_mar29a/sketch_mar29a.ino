@@ -4,22 +4,22 @@
   NED : Inertial Reference Frame, XYZ : Body
 */
 #include <MPU9250_asukiaaa.h>
-#include <BasicLinearAlgebra.h> using namespace BLA;
+#include <BasicLinearAlgebra.h> 
+using namespace BLA;
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>
 #include <Adafruit_BMP280.h>
 
-SoftwareSerial mySerial(3, 2);
+SoftwareSerial mySerial(28, 29);
 Adafruit_GPS GPS(&mySerial);
 MPU9250_asukiaaa mySensor;
 Adafruit_BMP280 bmp;
 
 #define GPSECHO false
-#define NUM_STATES 9
+#define NUM_STATES 5
 
-float accelBias[3] = {0.0}; // [R,P,Y]
-float gyroBias[3] = {0.0}; // [R,P,Y]
-bool initialGPSSuccess = false;
+float accelBias[2] = {0.0}; // [R,P]
+float gyroBias = 0.0; // [Y]
 float cosInitialLat;
 unsigned long previousTime, currentTime; // milliseconds
 float deltaTime; // seconds
@@ -30,22 +30,18 @@ const float DEG2RAD = 3.14159 / 180;
 const float RAD2DEG = 180 / 3.14159;
 const float KNOTS2MPS = 0.514444;
 
-BLA::Matrix<NUM_STATES, 1> x; // posN posE posD velN velE velD thetaR thetaP thetaY
-auto posNED = x.Submatrix<3, 1>(0, 0);
-auto velNED = x.Submatrix<3, 1>(3, 0);
-auto thetaRPY = x.Submatrix<3, 1>(6, 0);
-BLA::Matrix<6, 1> u; // accN accE accD omegaR omegaP omegaY
-auto accNED = u.Submatrix<3, 1>(0, 0);
-auto omegaRPY = u.Submatrix<3, 1>(3, 0);
-BLA::Matrix<3, 1> accRPY;
-BLA::Matrix<6, 1> zGPS; // posN, posE, posD, thetaY, velP, velR
+BLA::Matrix<NUM_STATES, 1> x; // posN posE velN velE thetaY
+auto posNE  = x.Submatrix<2, 1>(0, 0);
+auto velNE  = x.Submatrix<2, 1>(2, 0);
+auto thetaY = x.Submatrix<1, 1>(4, 0);
+BLA::Matrix<6, 1> u; // accN accE omegaY
+auto accNE  = u.Submatrix<2, 1>(0, 0);
+auto omegaY = u.Submatrix<1, 1>(2, 0);
+BLA::Matrix<2, 1> accRP;
+BLA::Matrix<5, 1> zGPS; // posN, posE, velN, velE, thetaY
 BLA::Matrix<1, 1> zMag; // thetaY
-BLA::Matrix<2, 1> zAcc; // thetaR thetaP
-BLA::Matrix<1, 1> zBMP; // posD
-BLA::Matrix<3, 1> g = {0, 0, 9.81}; // in NED coordinate frame
 BLA::Matrix<NUM_STATES, NUM_STATES> Q;
 BLA::Matrix<NUM_STATES, NUM_STATES> P;
-BLA::Matrix<NUM_STATES, 1> K;
 BLA::Matrix<NUM_STATES, NUM_STATES> I;
 
 void setup() {
@@ -63,16 +59,13 @@ void setup() {
   mySensor.beginGyro();
   mySensor.beginMag();
 
-  bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
-  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-  biasCorrection();
-  //defineIdentityMatrix();
+  // biasCorrection();
   //getInitialState();
-
+  // Set up covariance matrix Q
+  for (int i = 0; i < NUM_STATES; i++) {
+    Q(i,i) = 0.1;
+  }
+  Serial.println("Hello?");
   previousTime = millis();
 }
 
@@ -87,24 +80,22 @@ void loop() {
   // State Prediction
   estimateAngularPosition();
   estimateNEDAcceleration();
-  //accNED += g;
-  // estimateNEDVelocity();
-  // estimateNEDPosition();
+  estimateNEDVelocity();
+  estimateNEDPosition();
 
   // Kalman Update
   // updateGPS();
-  // updateMag();
-  // updateAcc();
-  // updateBMP();
-
+  updateMag();
+  
   // TEST AREA
-  //Serial.println(String(accelBias[0]) + ", " + String(accelBias[1]) + ", " + String(accelBias[2]));
-  Serial.println(String(accRPY(0)) + ", " + String(accRPY(1)) + ", " + String(accRPY(2)));
-  //Serial.println(String(accNED(0)) + ", " + String(accNED(1)) + ", " + String(accNED(2)));
-  //Serial.println(String(velNED(0)) + ", " + String(velNED(1)) + ", " + String(velNED(2)));
-  //Serial.println(String(accNED(0)) + ", " + String(accNED(1)) + ", " + String(accNED(2)) + ", " + String(velNED(0)) + ", " + String(velNED(1)) + ", " + String(velNED(2)));
-  //Serial.println(String(posNED(0)) + ", " + String(posNED(1)) + ", " + String(posNED(2)));
-  //Serial.println(String(thetaRPY(0)) + ", " + String(thetaRPY(1)) + ", " + String(thetaRPY(2)));
+  // Serial.println(String(accelBias[0]) + ", " + String(accelBias[1]) );
+  // Serial.println( String(accRP(0)) + ", " + String(accRP(1)) );
+  // Serial.println( String(accNE(0)) + ", " + String(accNE(1)) );
+  // Serial.println(String(velNE(0)) + ", " + String(velNE(1)) );
+  // Serial.println(String(posNE(0)) + ", " + String(posNE(1)) );
+  // Serial.println(String(zGPS(0)) + ", " + String(zGPS(1)) );
+  Serial.println("Hi!");
+  Serial.println(String(thetaY(0)));
 
   previousTime = currentTime;
 }
@@ -114,17 +105,12 @@ void biasCorrection() {
     mySensor.accelUpdate();
     accelBias[0] += -mySensor.accelY(); // Roll, raw value
     accelBias[1] += -mySensor.accelX(); // Pitch, raw value
-    accelBias[2] += -mySensor.accelZ(); // Yaw, raw value
     mySensor.gyroUpdate();
-    gyroBias[0] +=  mySensor.gyroY(); // Roll, raw value
-    gyroBias[1] +=  mySensor.gyroX(); // Pitch, raw value
-    gyroBias[2] += -mySensor.gyroZ(); // Yaw, raw value
+    gyroBias += -mySensor.gyroZ(); // Yaw, raw value
   }
-  for (int i = 0; i < 3; i++) {
-    accelBias[i] = accelBias[i] / 1000.0;
-    gyroBias[i] /= 1000.0;
-  }
-  accelBias[2] -=  1;
+  accelBias[0] /= 1000.0;
+  accelBias[1] /= 1000.0;
+  gyroBias /= 1000.0;
 }
 
 void defineIdentityMatrix() {
@@ -151,120 +137,95 @@ void getInitialState() {
   getGPSObservations();
   x(0) = zGPS(0);
   x(1) = zGPS(1);
-  Serial.println("Determining barometer-based altitude...");
-  getBMPObservations();
-  x(2) = zBMP(0);
-  Serial.println(zBMP(0));
   // Assume initial velocity is zero
   x(3) = 0.0;
   x(4) = 0.0;
-  x(5) = 0.0;
-  Serial.println("Determining accelerometer-based orientation...");
-  getAccObservations();
-  x(6) = zAcc(0);
-  x(7) = zAcc(1);
-  Serial.println(x(6));
-  Serial.println(x(7));
   Serial.println("Determining magnetometer-based orientation...");
   getMagObservations();
-  x(8) = zMag(0);
-  Serial.println(x(8));
+  x(5) = zMag(0);
+  Serial.println(x(5));
 }
 
 void estimateAngularPosition() {
   mySensor.gyroUpdate();
-
-  thetaRPY(0)  += (-mySensor.gyroY() + gyroBias[0]) * DEG2RAD * deltaTime; // Roll
-  thetaRPY(1)  += (-mySensor.gyroX() + gyroBias[1]) * DEG2RAD * deltaTime; // Pitch
-  thetaRPY(2)  += ( mySensor.gyroZ() + gyroBias[2]) * DEG2RAD * deltaTime; // Yaw
+  thetaY(0)  += ( mySensor.gyroZ() + gyroBias) * DEG2RAD * deltaTime; // Yaw
 }
 
 void estimateNEDAcceleration() {
-  getAccelRPY();
+  getAccelRP();
 
-  float sR = sin(thetaRPY(0));
-  float cR = cos(thetaRPY(0));
-  float sP = sin(thetaRPY(1));
-  float cP = cos(thetaRPY(1));
-  float sY = sin(thetaRPY(2));
-  float cY = cos(thetaRPY(2));
+  float sY = sin(thetaY(0));
+  float cY = cos(thetaY(0));
 
-  BLA::Matrix<3, 3> RPYtoNED = {cY * cP, -sY*cR + cY*sP * sR,  sY*sR + cY*sP * cR,
-                                sY * cP, cY*cR + sY*sP * sR , -cY*sR + sY*sP*cR
-                                 - sP  , cP * sR            ,  cP*cR
-                               };
+  accNE(0) = sY*accRP(0)  + cY*accRP(1);
+  accNE(1) = cY*accRP(0)  - sY*accRP(1);
 
-  accNED = RPYtoNED * accRPY; // NED frame
 }
 
 void estimateNEDVelocity() {
-  velNED += accNED * deltaTime;
+  velNE += accNE * deltaTime;
 }
 
 void estimateNEDPosition() {
-  posNED += velNED * deltaTime + accNED * pow(deltaTime, 2);
+  posNE += velNE * deltaTime + accNE * pow(deltaTime, 2);
 }
 
-void getAccelRPY() {
+void getAccelRP() {
   mySensor.accelUpdate();
-
-  accRPY(0) = (mySensor.accelY() - accelBias[0])*9.81; // Along the Roll axis
-  accRPY(1) = (mySensor.accelX() - accelBias[1])*9.81; // Along the Pitch axis
-  accRPY(2) = (-mySensor.accelZ() - accelBias[2])*9.81; // Along the Yaw axis
+  accRP(0) = (-mySensor.accelY() + accelBias[0])*9.81; // Along the Roll axis
+  accRP(1) = (-mySensor.accelX() + accelBias[1])*9.81; // Along the Pitch axis
 }
 
 void getGPSObservations() {
-
-  // Uses equirectangular projection based off of https://stackoverflow.com/a/16271669
+  // we poll for new data inside of loop()
+  // Uses equirectangular projection based off of https://stackoverflow.com/a/16271669 
   zGPS(0) = radiusEarth * (GPS.latitudeDegrees * DEG2RAD); // N in NED
   zGPS(1) = radiusEarth * (GPS.longitudeDegrees * DEG2RAD) * cosInitialLat; // E in NED
-  zGPS(2) = GPS.altitude; // z in NED
-  zGPS(3) = GPS.angle; // Yaw angle with respect to N in NED
-  zGPS(4) = (GPS.speed * KNOTS2MPS) * sin(GPS.angle * DEG2RAD);
-  zGPS(5) = (GPS.speed * KNOTS2MPS) * cos(GPS.angle * DEG2RAD);
-}
-
-void getBMPObservations() {
-  zBMP(0) = -bmp.readAltitude(1019.25); // z in NED
-}
-
-void getAccObservations() {
-  // based on https://forum.arduino.cc/t/getting-pitch-and-roll-from-acceleromter-data/694148
-  getAccelRPY();
-  zAcc(0) = atan2(accRPY(1) , accRPY(2));
-  zAcc(1) = atan2( (-accRPY(0)) , sqrt(accRPY(1) * accRPY(1) + accRPY(2) * accRPY(2)) );
+  zGPS(2) = (GPS.speed * KNOTS2MPS) * cos(GPS.angle * DEG2RAD); // velN
+  zGPS(3) = (GPS.speed * KNOTS2MPS) * sin(GPS.angle * DEG2RAD); // velE
+  zGPS(4) = GPS.angle; // Yaw angle with respect to N in NED
 }
 
 void getMagObservations() {
   // using https://www.best-microcontroller-projects.com/magnetometer-tilt-compensation.html
   mySensor.magUpdate();
-  float sR = sin(thetaRPY(0));
-  float cR = cos(thetaRPY(0));
-  float sP = sin(thetaRPY(1));
-  float cP = cos(thetaRPY(1));
-
-  double Mx = mySensor.magX() * cP + mySensor.magY() * sR * sP - mySensor.magZ() * cR * sP;
-  double My = mySensor.magY() * cR + mySensor.magZ() * sR ;
-
-  zMag(0) = -atan2(My, Mx);
+  zMag(0) = -atan2(mySensor.magY(), mySensor.magX());
 }
 
 void updateGPS() {
   getGPSObservations();
-  BLA::Matrix<1, NUM_STATES> H = {};
-  BLA::Matrix<1, 1> S;
-  double r[zGPS.Rows];
-  BLA::Matrix<1, 1> Z;
-  BLA::Matrix<1, 1> R;
-
-  for (int i = 0; i < zGPS.Rows; i++)
-  {
-    Z = zGPS(i);
-    R = r[i];
-    S = H * P * ~H + R;
-    K = P * ~H * Invert(S);
-    // P *= (I - K*H);
-    P = (I - K * H) * P * ~(I - K * H) + K * R * ~K; // Use the Joseph stabilized version instead
-    x += K * (Z - H * x);
+  defineIdentityMatrix();
+  const int NUM_OBS = 5;
+  BLA::Matrix<NUM_STATES,NUM_OBS> K;
+  BLA::Matrix<NUM_OBS, NUM_STATES> H;
+  for (int i = 0; i < NUM_OBS; i++) {
+    H(i,i) = 1.0;
   }
+  BLA::Matrix<NUM_OBS, NUM_OBS> S;
+  BLA::Matrix<NUM_OBS, NUM_OBS> R;
+  for (int i = 0; i < NUM_OBS; i++) {
+    R(i,i) = 0.1;
+  }
+
+  S = H * P * ~H + R;
+  K = P * ~H * Invert(S);
+  P = (I - K * H) * P * ~(I - K * H) + K * R * ~K; // Use the Joseph stabilized version instead
+  x += K * (zGPS - H * x);
+}
+
+void updateMag() {
+  getMagObservations();
+  defineIdentityMatrix();
+  const int NUM_OBS = 1;
+  BLA::Matrix<NUM_STATES,NUM_OBS> K;
+  BLA::Matrix<NUM_OBS, NUM_STATES> H = {0.0,0.0,0.0,0.0,1.0};
+  BLA::Matrix<NUM_OBS, NUM_OBS> S;
+  BLA::Matrix<NUM_OBS, NUM_OBS> R;
+  for (int i = 0; i < NUM_OBS; i++) {
+    R(i,i) = 0.1;
+  }
+  S = H * P * ~H + R;
+  K = P * ~H * Invert(S);
+  P = (I - K * H) * P * ~(I - K * H) + K * R * ~K; // Use the Joseph stabilized version instead
+  x += K * (zMag - H * x);
 }
