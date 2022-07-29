@@ -5,11 +5,7 @@
  * Roll-Pitch-Yaw reference frame for body motions
  */
 
-#include <BasicLinearAlgebra.h> 
-using namespace BLA;
-#include <TinyGPS.h> // GPS
 #include <MPU9250_asukiaaa.h> // IMU
-#include <Adafruit_BMP280.h> // Barometer
 #include <MadgwickAHRS.h>
 
 // Definitions
@@ -23,6 +19,7 @@ float cosInitialLat;
 unsigned long previousTime; // milliseconds
 float deltaTime; // seconds
 const float radiusEarth = 6378100; // metres
+const int filterRate = 25; // Hz
 
 // Unit Conversions
 const float DEG2RAD = 3.14159 / 180;
@@ -30,48 +27,65 @@ const float RAD2DEG = 180 / 3.14159;
 const float KNOTS2MPS = 0.514444;
 
 // Initialize Objects
-TinyGPS gps;
-Adafruit_BMP280 Baro;
+Madgwick filter;
+unsigned long microsPerReading, microsPrevious;
+MPU9250_asukiaaa MPU;
 elapsedMillis currentTime;
 
 void setup() {
   // Initiate Connections
   Serial.begin(115200); // For debugging
-  HWSERIAL.begin(9600); // For GPS
+  // HWSERIAL.begin(9600); // For GPS
   Wire.begin(); // For GY-91
-  Wire.setSCL(16);
-  Wire.setSDA(17);
+
 
   // Initialize Objects
-  IMU.initialize();
+  MPU.beginAccel();
+  MPU.beginGyro();
+  MPU.beginMag();  
 
-  // INS Setup
-  // biasCorrection();
-  // getInitialStates();
+  filter.begin(filterRate);
   
-  previousTime = currentTime;
+  microsPerReading = 1000000 / filterRate;
+  microsPrevious = micros();
 }
 
 void loop() {
-  // Get GPS data
-  bool newGPSData = false;
-  while( HWSERIAL.available() ){
-    char c = HWSERIAL.read();
-    if(gps.encode(c)){
-      newGPSData = true;
-    }
+  float ax, ay, az;
+  float gx, gy, gz;
+  float roll, pitch, heading;
+  unsigned long microsNow;
+
+    // check if it's time to read data and update the filter
+  microsNow = micros();
+  if (microsNow - microsPrevious >= microsPerReading) {
+
+    // read raw data from IMU
+    MPU.accelUpdate();
+    ax = MPU.accelX();
+    ay = MPU.accelY();
+    az = MPU.accelZ();
+    MPU.gyroUpdate();
+    gx = MPU.gyroX();
+    gy = MPU.gyroY();
+    gz = MPU.gyroZ();
+
+    // update the filter, which computes orientation
+    filter.updateIMU(gx, gy, gz, ax, ay, az);
+
+    // print the heading, pitch and roll
+    roll = filter.getRoll();
+    pitch = filter.getPitch();
+    heading = filter.getYaw();
+    Serial.print("Orientation: ");
+    Serial.print(heading);
+    Serial.print(" ");
+    Serial.print(pitch);
+    Serial.print(" ");
+    Serial.println(roll);
+
+    // increment previous time, so we keep proper pace
+    microsPrevious = microsPrevious + microsPerReading;
   }
 
-  // Estimate State
-  // estimateAngularPosition();
-  // estimateNEDAcceleration();
-  deltaTime = (currentTime - previousTime);
-  // estimateNEDVelocity();
-  // estimateNEDPosition();
-  previousTime = currentTime;
-
-  // Kalman Update
-  // updateGPS();
-  // updateBaro();
-  // updateMag();
 }
