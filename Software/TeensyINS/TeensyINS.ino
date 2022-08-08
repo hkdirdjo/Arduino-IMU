@@ -14,13 +14,15 @@ using namespace BLA;
 
 // Definitions
 #define NUM_STATES 5
-#define NUM_OBS 3
+#define NUM_OBS 5
+#define NUM_COM 3
 #define HWSERIAL Serial1
 
 // Global Variables
 float cosInitialLat;
+bool newGPSData = false;
 unsigned long previousTime; // milliseconds
-const float radiusEarth = 6378100; // metres
+const float radiusEarth = 6378100.0; // metres
 const int predictRate = 25; // Hz
 const int updateRate = 1; // Hz
 const int debugRate = 10; // Hz
@@ -31,6 +33,8 @@ float deltaTime = 1/predictRate; // seconds
 float ax, ay, az;
 float gx, gy, gz;
 float roll, pitch, heading;
+float flat, flon;
+unsigned long age;
 
 // Unit Conversions
 const float DEG2RAD = 3.14159 / 180;
@@ -51,7 +55,7 @@ BLA::Matrix<NUM_STATES, 1> x; // posE posN velE velN theta
 auto posEN = x.Submatrix<2, 1>(0, 0);
 auto velEN = x.Submatrix<2, 1>(2, 0);
 auto theta = x.Submatrix<1, 1>(4, 0);
-BLA::Matrix<3, 1> u; // accE accN omega
+BLA::Matrix<NUM_COM, 1> u; // accE accN omega
 auto accEN = u.Submatrix<2, 1>(0, 0);
 auto omega = u.Submatrix<1, 1>(2, 0);
 BLA::Matrix<2,1> accRP;
@@ -61,7 +65,7 @@ BLA::Matrix<NUM_STATES, NUM_STATES> f = {1.0, 0.0, 9.9, 0.0, 0.0,
                                          0.0, 0.0, 1.0, 0.0, 0.0,
                                          0.0, 0.0, 0.0, 1.0, 0.0,
                                          0.0, 0.0, 0.0, 0.0, 0.0};
-BLA::Matrix<NUM_STATES, NUM_OBS> B = {9.9, 0.0, 0.0,
+BLA::Matrix<NUM_STATES, NUM_COM> B = {9.9, 0.0, 0.0,
                                       0.0, 9.9, 0.0,
                                       9.9, 0.0, 0.0,
                                       0.0, 9.9, 0.0,
@@ -72,7 +76,14 @@ BLA::Matrix<NUM_STATES, NUM_OBS> K; // Kalman Gains
 BLA::Identity<NUM_STATES, NUM_STATES> I;
 BLA::Matrix<NUM_STATES, NUM_STATES> J; // temp
 BLA::Matrix<NUM_OBS, NUM_STATES> H; // Observation matrices
-BLA::Matrix<NUM_OBS, NUM_OBS> R; // Measurement covariance matrix
+BLA::Matrix<NUM_OBS, NUM_OBS> R = {5.0, 0.0, 0.0, 0.0, 0.0,
+                                   0.0, 5.0, 0.0, 0.0, 0.0,
+                                   0.0, 0.0, 1.0, 0.0, 0.0,
+                                   0.0, 0.0, 0.0, 1.0, 0.0,
+                                   0.0, 0.0, 0.0, 0.0, 5.0,
+  
+  ; // Measurement covariance matrix
+}
 BLA::Matrix<NUM_OBS, NUM_OBS> S; // Temp variable
 BLA::Matrix<NUM_STATES, NUM_STATES> T; // Temp variable
 BLA::Matrix<2,2> CoordinateTransform;
@@ -80,7 +91,7 @@ BLA::Matrix<2,2> CoordinateTransform;
 void setup() {
   // Initiate Connections
   Serial.begin(115200); // For debugging
-  // HWSERIAL.begin(9600); // For GPS
+  HWSERIAL.begin(9600); // For GPS
   Wire.begin(); // For GY-91
   
   // Initialize Objects
@@ -90,6 +101,8 @@ void setup() {
   filter.begin(predictRate);
 
   x = {0.0, 0.0, 0.0, 0.0, 0.0};
+
+  cosInitialLat = cos(cosInitialLat*DEG2RAD);
 }
 
 void loop() {
@@ -98,6 +111,11 @@ void loop() {
   }
   if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
     // updateKalman();
+    if (newGPSData) {
+      Serial.println("New Data Acquired!");
+      getGPSObservations();
+      newGPSData = false;
+    }
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
 
@@ -113,6 +131,15 @@ void loop() {
     // Serial.println( String(u(0),3) + "," + String(u(1),3) );
 
     // GPS debugging
+   //  Serial.println(String(flat,8) + "," + String(flon,8) );
+   // Serial.println( String(zGPS(4),8) );
+   // Serial.println( String(zGPS(0),5) + "," + String(zGPS(1),5) + "," + String(zGPS(2),5) + "," + String(zGPS(3),5) + "," + String(zGPS(4),5) ); 
+  }
+  if (HWSERIAL.available()) {
+    char c = HWSERIAL.read();
+    if(GPS.encode(c)) {
+      newGPSData = true;
+    }
   }
 }
 
@@ -154,8 +181,7 @@ void predictKalman() {
   B(3,0) = deltaTime;
   B(4,1) = deltaTime;
 
-  x = B*u;
-  //x = f*x + B*u;
+  x = f*x + B*u;
   P = f*P*~f + Q;
 }
 
@@ -171,12 +197,10 @@ void updateKalman() {
 
 void getGPSObservations() {
   // Uses equirectangular projection based off of https://stackoverflow.com/a/16271669
-  float flat, flon;
-  unsigned long age;
   GPS.f_get_position(&flat, &flon, &age);
   zGPS(0) = radiusEarth * (flon * DEG2RAD) * cosInitialLat; // E in NED
   zGPS(1) = radiusEarth * (flat * DEG2RAD); // N in NED
-  zGPS(2) = (GPS.f_speed_kmph() * KPH2MPS) * sin(GPS.f_course() * DEG2RAD);
-  zGPS(3) = (GPS.f_speed_kmph() * KPH2MPS) * cos(GPS.f_course() * DEG2RAD);
+  zGPS(2) = (GPS.f_speed_mps()) * sin(GPS.f_course() * DEG2RAD);
+  zGPS(3) = (GPS.f_speed_mps()) * cos(GPS.f_course() * DEG2RAD);
   zGPS(4) = GPS.f_course(); // Yaw angle with respect to N in NED
 }
