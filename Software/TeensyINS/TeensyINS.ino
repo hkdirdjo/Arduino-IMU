@@ -19,28 +19,29 @@ using namespace BLA;
 #define HWSERIAL Serial1
 
 // Global Variables
-float cosInitialLat;
+float cosInitialLat = 49.20689;
 bool newGPSData = false;
 unsigned long previousTime; // milliseconds
 const float radiusEarth = 6378100.0; // metres
-const int predictRate = 25; // Hz
+const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
 const int debugRate = 10; // Hz
 unsigned long microsPerFilter = 1000000/predictRate;
 unsigned long microsPerUpdate = 1000000/updateRate;
 unsigned long microsPerDebug = 1000000/debugRate;
-float deltaTime = 1/predictRate; // seconds
+float deltaTime = 1.0/ (float)predictRate; // seconds
 float ax, ay, az;
 float gx, gy, gz;
+float mx, my, mz;
 float roll, pitch, heading;
 float flat, flon;
 unsigned long age;
 
 // Unit Conversions
-const float DEG2RAD = 3.14159 / 180;
-const float RAD2DEG = 180 / 3.14159;
-const float KPH2MPS = 1.0/3.6;
-const float Gs2SI = 9.81;
+const double DEG2RAD = 3.14159 / 180.0;
+const double RAD2DEG = 180.0 / 3.14159;
+const double KPH2MPS = 1.0/3.6;
+const double Gs2SI = 9.81;
 
 // Initialize Objects
 Madgwick filter;
@@ -51,42 +52,47 @@ Chrono chronoUpdate(Chrono::MICROS);
 Chrono chronoDebug(Chrono::MICROS);
 
 // Matrices
-BLA::Matrix<NUM_STATES, 1> x; // posE posN velE velN theta
+BLA::Matrix<NUM_STATES, 1, Array<NUM_STATES,1,double> > x; // posE posN velE velN theta
 auto posEN = x.Submatrix<2, 1>(0, 0);
 auto velEN = x.Submatrix<2, 1>(2, 0);
 auto theta = x.Submatrix<1, 1>(4, 0);
-BLA::Matrix<NUM_COM, 1> u; // accE accN omega
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > u; // accE accN omega
 auto accEN = u.Submatrix<2, 1>(0, 0);
 auto omega = u.Submatrix<1, 1>(2, 0);
-BLA::Matrix<2,1> accRP;
-BLA::Matrix<NUM_OBS, 1> zGPS; // posE, posN, velE, velN, theta
-BLA::Matrix<NUM_STATES, NUM_STATES> f = {1.0, 0.0, 9.9, 0.0, 0.0,
-                                         0.0, 1.0, 0.0, 9.9, 0.0,
-                                         0.0, 0.0, 1.0, 0.0, 0.0,
-                                         0.0, 0.0, 0.0, 1.0, 0.0,
-                                         0.0, 0.0, 0.0, 0.0, 0.0};
-BLA::Matrix<NUM_STATES, NUM_COM> B = {9.9, 0.0, 0.0,
-                                      0.0, 9.9, 0.0,
-                                      9.9, 0.0, 0.0,
-                                      0.0, 9.9, 0.0,
-                                      0.0, 0.0, 1.0};
-BLA::Matrix<NUM_STATES, NUM_STATES> Q; // model covariance
-BLA::Matrix<NUM_STATES, NUM_STATES> P;
-BLA::Matrix<NUM_STATES, NUM_OBS> K; // Kalman Gains
+BLA::Matrix<2,1, Array<2,1,double> > accRP;
+BLA::Matrix<NUM_OBS, 1, Array<NUM_OBS,1,double> > zGPS; // posE, posN, velE, velN, theta
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1.0, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 1.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 1.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 1.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 0.0, 0.0};
+BLA::Matrix<NUM_STATES, NUM_COM, Array<NUM_STATES,NUM_COM,double> > B = {9.9, 0.0, 0.0,
+                                                                         0.0, 9.9, 0.0,
+                                                                         9.9, 0.0, 0.0,
+                                                                         0.0, 9.9, 0.0,
+                                                                         0.0, 0.0, 1.0};
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > Q = {8.0, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 8.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 5.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 5.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 0.0, 1.0};// model covariance
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > P;
+BLA::Matrix<NUM_STATES, NUM_OBS, Array<NUM_STATES,NUM_OBS,double> > K; // Kalman Gains
 BLA::Identity<NUM_STATES, NUM_STATES> I;
-BLA::Matrix<NUM_STATES, NUM_STATES> J; // temp
-BLA::Matrix<NUM_OBS, NUM_STATES> H; // Observation matrices
-BLA::Matrix<NUM_OBS, NUM_OBS> R = {5.0, 0.0, 0.0, 0.0, 0.0,
-                                   0.0, 5.0, 0.0, 0.0, 0.0,
-                                   0.0, 0.0, 1.0, 0.0, 0.0,
-                                   0.0, 0.0, 0.0, 1.0, 0.0,
-                                   0.0, 0.0, 0.0, 0.0, 5.0,
-  
-  ; // Measurement covariance matrix
-}
-BLA::Matrix<NUM_OBS, NUM_OBS> S; // Temp variable
-BLA::Matrix<NUM_STATES, NUM_STATES> T; // Temp variable
-BLA::Matrix<2,2> CoordinateTransform;
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > J; // Temp variable
+BLA::Matrix<NUM_OBS, NUM_STATES, Array<NUM_OBS, NUM_STATES,double> > H = {1.0, 0.0, 0.0, 0.0, 0.0,
+                                                                          0.0, 1.0, 0.0, 0.0, 0.0,
+                                                                          0.0, 0.0, 1.0, 0.0, 0.0,
+                                                                          0.0, 0.0, 0.0, 1.0, 0.0,
+                                                                          0.0, 0.0, 0.0, 0.0, 1.0};  // Observation matrices
+BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > R = {5.0, 0.0, 0.0, 0.0, 0.0,
+                                                                   0.0, 5.0, 0.0, 0.0, 0.0,
+                                                                   0.0, 0.0, 1.0, 0.0, 0.0,
+                                                                   0.0, 0.0, 0.0, 1.0, 0.0,
+                                                                   0.0, 0.0, 0.0, 0.0, 5.0}; // Measurement covariance matrix
+BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > S; // Temp variable
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > T; // Temp variable
+BLA::Matrix<2,2, Array<2,2,double> > CoordinateTransform;
 
 void setup() {
   // Initiate Connections
@@ -97,43 +103,51 @@ void setup() {
   // Initialize Objects
   MPU.beginAccel();
   MPU.beginGyro();
+  MPU.beginMag();
 
   filter.begin(predictRate);
 
-  x = {0.0, 0.0, 0.0, 0.0, 0.0};
+  x.Fill(0);
+  P.Fill(0);
 
   cosInitialLat = cos(cosInitialLat*DEG2RAD);
 }
 
 void loop() {
   if (chronoFilter.hasPassed(microsPerFilter,true)) {
-    // predictKalman();
+    predictKalman();
   }
-  if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
-    // updateKalman();
-    if (newGPSData) {
-      Serial.println("New Data Acquired!");
-      getGPSObservations();
-      newGPSData = false;
-    }
+  if (chronoUpdate.hasPassed(microsPerUpdate,true) && newGPSData) {
+    updateKalman();
+    newGPSData = false;
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
 
     // Predict debugging
-    
     // Serial.println( String(x(0),5) + "," + String(x(1),5) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
     // Serial.println( String(roll,3) + "," + String(pitch,3) );
     // Serial.println( String(heading,3) );
-    // Serial.println( String(B(0,0),9) );    
+    // Serial.println( String(B(0,0),9) ); 
+    // Serial.println( String(cosInitialLat,9) ); 
+    // Serial.println( String(deltaTime,9) );        
     // Serial.println( String(roll,3) + "," + String(pitch,3) + "," + String(heading,3) );
     // Serial.println( String(ax,3) + "," + String(ay,3) + "," + String(az,3));    
     // Serial.println( String(accRP(0),3) + "," + String(accRP(1),3) );
     // Serial.println( String(u(0),3) + "," + String(u(1),3) );
 
     // GPS debugging
-   //  Serial.println(String(flat,8) + "," + String(flon,8) );
-   // Serial.println( String(zGPS(4),8) );
-   // Serial.println( String(zGPS(0),5) + "," + String(zGPS(1),5) + "," + String(zGPS(2),5) + "," + String(zGPS(3),5) + "," + String(zGPS(4),5) ); 
+    // Serial.println(String(flat,8) + "," + String(flon,8) );
+    // Serial.println( String(zGPS(4),8) );
+    // Serial.println( String(zGPS(0),5) + "," + String(zGPS(1),5) + "," + String(zGPS(2),5) + "," + String(zGPS(3),5) + "," + String(zGPS(4),5) ); 
+    Serial.print( String(radiusEarth,9) + "," + String(flon,9) + "," + String(DEG2RAD,9)+ "," + String(cosInitialLat,9) + "," + String(radiusEarth * (flon * DEG2RAD) * cosInitialLat,9) + "," + String(zGPS(0),9));
+    Serial.println(",");
+    
+
+    // Filter debugging
+    // Serial.println( String(x(0),5) + "," + String(x(1),5) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) + "," + String(flat,5) + "," + String(flon,5) ); 
+    // Serial.println( String(B(2,0),5) + "," + String(u(0),5)+ "," + String(B(2,0)*u(0),5) ); 
+    // Serial.println( String(B(0,0),5) + "," + String(u(0),5)+ "," + String(B(0,0)*u(0),5) ); 
+    // Serial.println(String(f(0,0)*x(0)+f(0,2)*x(2),5));
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -153,7 +167,7 @@ void predictKalman() {
   gx = MPU.gyroY();
   gy = MPU.gyroX();
   gz = MPU.gyroZ();
-
+  
   // update the filter, which computes orientation
   filter.updateIMU(-gx, -gy, gz, -ax, -ay, az);
     
@@ -178,8 +192,8 @@ void predictKalman() {
   // update B matrix
   B(0,0) = 0.5*pow(deltaTime,2);
   B(1,1) = B(0,0);
-  B(3,0) = deltaTime;
-  B(4,1) = deltaTime;
+  B(2,0) = deltaTime;
+  B(3,1) = deltaTime;
 
   x = f*x + B*u;
   P = f*P*~f + Q;
