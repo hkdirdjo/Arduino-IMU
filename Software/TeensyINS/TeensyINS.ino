@@ -124,7 +124,7 @@ void loop() {
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
 
     // Predict debugging
-    // Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
+    Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
     // Serial.println( String(roll,3) + "," + String(pitch,3) );
     // Serial.println( String(heading,3) );
     // Serial.println( String(B(0,0),9) ); 
@@ -140,7 +140,7 @@ void loop() {
     //Serial.println( String(zGPS(0),12) + "," + String(zGPS(1),12) + "," + String(zGPS(2),12) + "," + String(zGPS(3),12) + "," + String(zGPS(4),12) ); 
 
     // Magnetometer Debugging
-    Serial.println( String(mx,5) + "," + String(my,5) + "," + String(mz,5) + "," + String(sqrt( mx*mx + my*my + mz*mz ),5) );
+    // Serial.println( String(mx,5) + "," + String(my,5) + "," + String(mz,5) + "," + String(sqrt( mx*mx + my*my + mz*mz ),5) );
      
     // Filter debugging
     // Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),9) + "," + String(x(3),9) + "," + String(x(4),9) + "," + String(flat,9) + "," + String(flon,9) ); 
@@ -159,20 +159,21 @@ void loop() {
 void predictKalman() {
   // read raw data from IMU into RPY coordinate system
   MPU.accelUpdate();
-  ax = -MPU.accelY()*Gs2SI; // ROLL
-  ay = -MPU.accelX()*Gs2SI; // PITCH
+  ax = MPU.accelY()*Gs2SI; // ROLL
+  ay = MPU.accelX()*Gs2SI; // PITCH
   az = -MPU.accelZ()*Gs2SI;// YAW
   MPU.gyroUpdate();
   gx = MPU.gyroY();
   gy = MPU.gyroX();
-  gz = MPU.gyroZ();
+  gz = -MPU.gyroZ();
   MPU.magUpdate();
   mx = MPU.magX();
   my = MPU.magY();
   mz = MPU.magZ();
   
   // update the filter, which computes orientation
-  filter.updateIMU(-gx, -gy, gz, -ax, -ay, az);
+  //filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
+  filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
     
   // print the heading, pitch and roll
   roll = filter.getRoll();
