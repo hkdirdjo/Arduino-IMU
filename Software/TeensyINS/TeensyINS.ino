@@ -19,26 +19,26 @@ using namespace BLA;
 #define HWSERIAL Serial1
 
 // Global Variables
-float cosInitialLat = 49.20689;
+double cosInitialLat = 49.20689;
 bool newGPSData = false;
 unsigned long previousTime; // milliseconds
-const float radiusEarth = 6378100.0; // metres
+double radiusEarth = 6371000; // metres
 const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
 const int debugRate = 10; // Hz
 unsigned long microsPerFilter = 1000000/predictRate;
 unsigned long microsPerUpdate = 1000000/updateRate;
 unsigned long microsPerDebug = 1000000/debugRate;
-float deltaTime = 1.0/ (float)predictRate; // seconds
-float ax, ay, az;
-float gx, gy, gz;
-float mx, my, mz;
-float roll, pitch, heading;
+double deltaTime = 1.0/ (double)predictRate; // seconds
+double ax, ay, az;
+double gx, gy, gz;
+double mx, my, mz;
+double roll, pitch, heading;
 float flat, flon;
 unsigned long age;
 
 // Unit Conversions
-const double DEG2RAD = 3.14159 / 180.0;
+const double DEG2RAD = PI / 180.0;
 const double RAD2DEG = 180.0 / 3.14159;
 const double KPH2MPS = 1.0/3.6;
 const double Gs2SI = 9.81;
@@ -124,11 +124,10 @@ void loop() {
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
 
     // Predict debugging
-    // Serial.println( String(x(0),5) + "," + String(x(1),5) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
+    // Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
     // Serial.println( String(roll,3) + "," + String(pitch,3) );
     // Serial.println( String(heading,3) );
     // Serial.println( String(B(0,0),9) ); 
-    // Serial.println( String(cosInitialLat,9) ); 
     // Serial.println( String(deltaTime,9) );        
     // Serial.println( String(roll,3) + "," + String(pitch,3) + "," + String(heading,3) );
     // Serial.println( String(ax,3) + "," + String(ay,3) + "," + String(az,3));    
@@ -138,13 +137,13 @@ void loop() {
     // GPS debugging
     // Serial.println(String(flat,8) + "," + String(flon,8) );
     // Serial.println( String(zGPS(4),8) );
-    // Serial.println( String(zGPS(0),5) + "," + String(zGPS(1),5) + "," + String(zGPS(2),5) + "," + String(zGPS(3),5) + "," + String(zGPS(4),5) ); 
-    Serial.print( String(radiusEarth,9) + "," + String(flon,9) + "," + String(DEG2RAD,9)+ "," + String(cosInitialLat,9) + "," + String(radiusEarth * (flon * DEG2RAD) * cosInitialLat,9) + "," + String(zGPS(0),9));
-    Serial.println(",");
-    
+    //Serial.println( String(zGPS(0),12) + "," + String(zGPS(1),12) + "," + String(zGPS(2),12) + "," + String(zGPS(3),12) + "," + String(zGPS(4),12) ); 
 
+    // Magnetometer Debugging
+    Serial.println( String(mx,5) + "," + String(my,5) + "," + String(mz,5) + "," + String(sqrt( mx*mx + my*my + mz*mz ),5) );
+     
     // Filter debugging
-    // Serial.println( String(x(0),5) + "," + String(x(1),5) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) + "," + String(flat,5) + "," + String(flon,5) ); 
+    // Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),9) + "," + String(x(3),9) + "," + String(x(4),9) + "," + String(flat,9) + "," + String(flon,9) ); 
     // Serial.println( String(B(2,0),5) + "," + String(u(0),5)+ "," + String(B(2,0)*u(0),5) ); 
     // Serial.println( String(B(0,0),5) + "," + String(u(0),5)+ "," + String(B(0,0)*u(0),5) ); 
     // Serial.println(String(f(0,0)*x(0)+f(0,2)*x(2),5));
@@ -167,6 +166,10 @@ void predictKalman() {
   gx = MPU.gyroY();
   gy = MPU.gyroX();
   gz = MPU.gyroZ();
+  MPU.magUpdate();
+  mx = MPU.magX();
+  my = MPU.magY();
+  mz = MPU.magZ();
   
   // update the filter, which computes orientation
   filter.updateIMU(-gx, -gy, gz, -ax, -ay, az);
@@ -212,8 +215,10 @@ void updateKalman() {
 void getGPSObservations() {
   // Uses equirectangular projection based off of https://stackoverflow.com/a/16271669
   GPS.f_get_position(&flat, &flon, &age);
-  zGPS(0) = radiusEarth * (flon * DEG2RAD) * cosInitialLat; // E in NED
-  zGPS(1) = radiusEarth * (flat * DEG2RAD); // N in NED
+  double dlat = (double) flat;
+  double dlon = (double) flon;
+  zGPS(0) = radiusEarth*dlon*DEG2RAD*cosInitialLat; // E in NED
+  zGPS(1) = radiusEarth*dlat*DEG2RAD; // N in NED
   zGPS(2) = (GPS.f_speed_mps()) * sin(GPS.f_course() * DEG2RAD);
   zGPS(3) = (GPS.f_speed_mps()) * cos(GPS.f_course() * DEG2RAD);
   zGPS(4) = GPS.f_course(); // Yaw angle with respect to N in NED
