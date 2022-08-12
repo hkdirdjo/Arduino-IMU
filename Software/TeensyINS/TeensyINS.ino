@@ -25,7 +25,7 @@ unsigned long previousTime; // milliseconds
 double radiusEarth = 6371000; // metres
 const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
-const int debugRate = 10; // Hz
+const int debugRate = 5; // Hz
 unsigned long microsPerFilter = 1000000/predictRate;
 unsigned long microsPerUpdate = 1000000/updateRate;
 unsigned long microsPerDebug = 1000000/debugRate;
@@ -75,7 +75,7 @@ BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > Q = {8
                                                                                0.0, 8.0, 0.0, 0.0, 0.0,
                                                                                0.0, 0.0, 5.0, 0.0, 0.0,
                                                                                0.0, 0.0, 0.0, 5.0, 0.0,
-                                                                               0.0, 0.0, 0.0, 0.0, 1.0};// model covariance
+                                                                               0.0, 0.0, 0.0, 0.0, 5.0};// model covariance
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > P;
 BLA::Matrix<NUM_STATES, NUM_OBS, Array<NUM_STATES,NUM_OBS,double> > K; // Kalman Gains
 BLA::Identity<NUM_STATES, NUM_STATES> I;
@@ -89,7 +89,7 @@ BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > R = {5.0, 0.0, 0.0
                                                                    0.0, 5.0, 0.0, 0.0, 0.0,
                                                                    0.0, 0.0, 1.0, 0.0, 0.0,
                                                                    0.0, 0.0, 0.0, 1.0, 0.0,
-                                                                   0.0, 0.0, 0.0, 0.0, 5.0}; // Measurement covariance matrix
+                                                                   0.0, 0.0, 0.0, 0.0, 1.0}; // Measurement covariance matrix
 BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > S; // Temp variable
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > T; // Temp variable
 BLA::Matrix<2,2, Array<2,2,double> > CoordinateTransform;
@@ -124,7 +124,7 @@ void loop() {
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
 
     // Predict debugging
-    Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),5) + "," + String(x(3),5) + "," + String(x(4),5) ); 
+    Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
     // Serial.println( String(roll,3) + "," + String(pitch,3) );
     // Serial.println( String(heading,3) );
     // Serial.println( String(B(0,0),9) ); 
@@ -172,8 +172,8 @@ void predictKalman() {
   mz = MPU.magZ();
   
   // update the filter, which computes orientation
-  //filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
-  filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
+  filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
+  //filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
     
   // print the heading, pitch and roll
   roll = filter.getRoll();
@@ -223,4 +223,11 @@ void getGPSObservations() {
   zGPS(2) = (GPS.f_speed_mps()) * sin(GPS.f_course() * DEG2RAD);
   zGPS(3) = (GPS.f_speed_mps()) * cos(GPS.f_course() * DEG2RAD);
   zGPS(4) = GPS.f_course(); // Yaw angle with respect to N in NED
+}
+
+void velocityWatchdog() {
+  if (abs(x(2)) > 50 || abs(x(3)) > 50) {
+    x(2) = 0;
+    x(3) = 0;
+  }
 }
