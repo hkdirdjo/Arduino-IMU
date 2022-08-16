@@ -6,6 +6,7 @@
  */
 
 #include <MPU9250_asukiaaa.h> // IMU
+#include <Adafruit_BMP280.h> // Barometer
 #include <BasicLinearAlgebra.h> 
 using namespace BLA;
 #include <TinyGPS.h>
@@ -13,29 +14,32 @@ using namespace BLA;
 #include <Chrono.h>
 
 // Definitions
-#define NUM_STATES 5
-#define NUM_OBS 5
-#define NUM_COM 3
 #define HWSERIAL Serial1
+#define MICROS 1000000
+// GPS Module Update Rate Commands
+#define PMTK_SET_NMEA_UPDATE_1HZ "$PMTK220,1000*1F" ///<  1 Hz
+#define PMTK_SET_NMEA_UPDATE_5HZ "$PMTK220,200*2C"  ///<  5 Hz
+#define PMTK_API_SET_FIX_CTL_1HZ "$PMTK300,1000,0,0,0,0*1C" ///< 1 Hz
+#define PMTK_API_SET_FIX_CTL_5HZ "$PMTK300,200,0,0,0,0*2F"  ///< 5 Hz
 
 // Global Variables
-double cosInitialLat = 49.20689;
+double cosInitialLat = 49.20689; // Vancouver
 bool newGPSData = false;
-unsigned long previousTime; // milliseconds
 double radiusEarth = 6371000; // metres
 const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
 const int debugRate = 5; // Hz
-unsigned long microsPerFilter = 1000000/predictRate;
-unsigned long microsPerUpdate = 1000000/updateRate;
-unsigned long microsPerDebug = 1000000/debugRate;
-double deltaTime = 1.0/ (double)predictRate; // seconds
-double ax, ay, az;
-double gx, gy, gz;
-double mx, my, mz;
-double roll, pitch, heading;
-float flat, flon;
-unsigned long age;
+unsigned long microsPerFilter = MICROS/predictRate;
+unsigned long microsPerUpdate = MICROS/updateRate;
+unsigned long microsPerDebug = MICROS/debugRate;
+double deltaTime = 1.0/(double)predictRate; // seconds
+double aR, aP, aY;
+double gR, gP, gY;
+double mR, mP, mY;
+double q0, q1, q2, q3; // normalized rotation quaternion provided by the Madgwick AHRS
+float flat, flon; unsigned long age; // variables needed for TinyGPS
+
+const double localAirPressure = (double) 1013.25; // in hPa - must update to local conditions before use!
 
 // Unit Conversions
 const double DEG2RAD = PI / 180.0;
@@ -47,52 +51,38 @@ const double Gs2SI = 9.81;
 Madgwick filter;
 TinyGPS GPS;
 MPU9250_asukiaaa MPU;
+Adafruit_BMP280 BMP;
 Chrono chronoFilter(Chrono::MICROS);
 Chrono chronoUpdate(Chrono::MICROS);
 Chrono chronoDebug(Chrono::MICROS);
 
 // Matrices
-BLA::Matrix<NUM_STATES, 1, Array<NUM_STATES,1,double> > x; // posE posN velE velN theta
-auto posEN = x.Submatrix<2, 1>(0, 0);
-auto velEN = x.Submatrix<2, 1>(2, 0);
-auto theta = x.Submatrix<1, 1>(4, 0);
-BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > u; // accE accN omega
-auto accEN = u.Submatrix<2, 1>(0, 0);
-auto omega = u.Submatrix<1, 1>(2, 0);
-BLA::Matrix<2,1, Array<2,1,double> > accRP;
-BLA::Matrix<NUM_OBS, 1, Array<NUM_OBS,1,double> > zGPS; // posE, posN, velE, velN, theta
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1.0, 0.0, 0.0, 0.0, 0.0,
-                                                                               0.0, 1.0, 0.0, 0.0, 0.0,
-                                                                               0.0, 0.0, 1.0, 0.0, 0.0,
-                                                                               0.0, 0.0, 0.0, 1.0, 0.0,
-                                                                               0.0, 0.0, 0.0, 0.0, 0.0};
-BLA::Matrix<NUM_STATES, NUM_COM, Array<NUM_STATES,NUM_COM,double> > B = {9.9, 0.0, 0.0,
-                                                                         0.0, 9.9, 0.0,
-                                                                         9.9, 0.0, 0.0,
-                                                                         0.0, 9.9, 0.0,
-                                                                         0.0, 0.0, 1.0};
+#define NUM_STATES 6
+#define NUM_OBS_GPS 3
+#define NUM_OBS_BARO 1
+#define NUM_COM 3
+
+BLA::Matrix<NUM_STATES, 1, Array<NUM_STATES,1,double> > x; // posE posN posD velE velN velD
+  auto posEND = x.Submatrix<3, 1>(0, 0);
+  auto velEND = x.Submatrix<3, 1>(3, 0);
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > u; // accE accN accD
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > accRPY;
+BLA::Matrix<NUM_OBS_GPS, 1, Array<NUM_OBS_GPS,1,double> > zGPS; // posE, posN, posD
+BLA::Matrix<NUM_OBS_BARO,1, Array<NUM_OBS_BARO,1,double> > zBaro; // posD
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 0.0, 1.0, 0.0,                                                                               
+                                                                               0.0, 0.0, 0.0, 0.0, 0.0, 1.0};                                                                               
+BLA::Matrix<NUM_STATES, NUM_COM, Array<NUM_STATES,NUM_COM,double> > b;
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > Q = {8.0, 0.0, 0.0, 0.0, 0.0,
                                                                                0.0, 8.0, 0.0, 0.0, 0.0,
                                                                                0.0, 0.0, 5.0, 0.0, 0.0,
                                                                                0.0, 0.0, 0.0, 5.0, 0.0,
                                                                                0.0, 0.0, 0.0, 0.0, 5.0};// model covariance
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > P;
-BLA::Matrix<NUM_STATES, NUM_OBS, Array<NUM_STATES,NUM_OBS,double> > K; // Kalman Gains
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > p;
 BLA::Identity<NUM_STATES, NUM_STATES> I;
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > J; // Temp variable
-BLA::Matrix<NUM_OBS, NUM_STATES, Array<NUM_OBS, NUM_STATES,double> > H = {1.0, 0.0, 0.0, 0.0, 0.0,
-                                                                          0.0, 1.0, 0.0, 0.0, 0.0,
-                                                                          0.0, 0.0, 1.0, 0.0, 0.0,
-                                                                          0.0, 0.0, 0.0, 1.0, 0.0,
-                                                                          0.0, 0.0, 0.0, 0.0, 1.0};  // Observation matrices
-BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > R = {5.0, 0.0, 0.0, 0.0, 0.0,
-                                                                   0.0, 5.0, 0.0, 0.0, 0.0,
-                                                                   0.0, 0.0, 1.0, 0.0, 0.0,
-                                                                   0.0, 0.0, 0.0, 1.0, 0.0,
-                                                                   0.0, 0.0, 0.0, 0.0, 1.0}; // Measurement covariance matrix
-BLA::Matrix<NUM_OBS, NUM_OBS, Array<NUM_OBS,NUM_OBS,double> > S; // Temp variable
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > T; // Temp variable
-BLA::Matrix<2,2, Array<2,2,double> > CoordinateTransform;
 
 void setup() {
   // Initiate Connections
@@ -105,10 +95,15 @@ void setup() {
   MPU.beginGyro();
   MPU.beginMag();
 
+  // Boost GPS Update Rate to 5Hz
+  // HWSERIAL.println(PMTK_SET_NMEA_UPDATE_5HZ);
+  // HWSERIAL.println(PMTK_API_SET_FIX_CTL_5HZ);
+
   filter.begin(predictRate);
 
   x.Fill(0);
-  P.Fill(0);
+  p.Fill(0);
+  b.Fill(0);
 
   cosInitialLat = cos(cosInitialLat*DEG2RAD);
 }
@@ -117,36 +112,14 @@ void loop() {
   if (chronoFilter.hasPassed(microsPerFilter,true)) {
     predictKalman();
   }
-  if (chronoUpdate.hasPassed(microsPerUpdate,true) && newGPSData) {
-    updateKalman();
-    newGPSData = false;
+  if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
+    if (newGPSData) {
+      newGPSData = false;  
+    }
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
-
     // Predict debugging
     Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
-    // Serial.println( String(roll,3) + "," + String(pitch,3) );
-    // Serial.println( String(heading,3) );
-    // Serial.println( String(B(0,0),9) ); 
-    // Serial.println( String(deltaTime,9) );        
-    // Serial.println( String(roll,3) + "," + String(pitch,3) + "," + String(heading,3) );
-    // Serial.println( String(ax,3) + "," + String(ay,3) + "," + String(az,3));    
-    // Serial.println( String(accRP(0),3) + "," + String(accRP(1),3) );
-    // Serial.println( String(u(0),3) + "," + String(u(1),3) );
-
-    // GPS debugging
-    // Serial.println(String(flat,8) + "," + String(flon,8) );
-    // Serial.println( String(zGPS(4),8) );
-    //Serial.println( String(zGPS(0),12) + "," + String(zGPS(1),12) + "," + String(zGPS(2),12) + "," + String(zGPS(3),12) + "," + String(zGPS(4),12) ); 
-
-    // Magnetometer Debugging
-    // Serial.println( String(mx,5) + "," + String(my,5) + "," + String(mz,5) + "," + String(sqrt( mx*mx + my*my + mz*mz ),5) );
-     
-    // Filter debugging
-    // Serial.println( String(x(0),9) + "," + String(x(1),9) + "," + String(x(2),9) + "," + String(x(3),9) + "," + String(x(4),9) + "," + String(flat,9) + "," + String(flon,9) ); 
-    // Serial.println( String(B(2,0),5) + "," + String(u(0),5)+ "," + String(B(2,0)*u(0),5) ); 
-    // Serial.println( String(B(0,0),5) + "," + String(u(0),5)+ "," + String(B(0,0)*u(0),5) ); 
-    // Serial.println(String(f(0,0)*x(0)+f(0,2)*x(2),5));
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -159,58 +132,64 @@ void loop() {
 void predictKalman() {
   // read raw data from IMU into RPY coordinate system
   MPU.accelUpdate();
+  MPU.gyroUpdate();  
+  MPU.magUpdate();
+
+  // Convert to Body Coordinates and correct units
   ax = MPU.accelY()*Gs2SI; // ROLL
   ay = MPU.accelX()*Gs2SI; // PITCH
   az = -MPU.accelZ()*Gs2SI;// YAW
-  MPU.gyroUpdate();
   gx = MPU.gyroY();
   gy = MPU.gyroX();
   gz = -MPU.gyroZ();
-  MPU.magUpdate();
   mx = MPU.magX();
   my = MPU.magY();
   mz = MPU.magZ();
   
   // update the filter, which computes orientation
-  filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
-  //filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
-    
-  // print the heading, pitch and roll
-  roll = filter.getRoll();
-  pitch = filter.getPitch();
-  heading = filter.getYaw() - 180;
-    
-  accRP(0) = ax;
-  accRP(1) = ay;
-  CoordinateTransform = {sin(heading*DEG2RAD),  cos(heading*DEG2RAD),
-                         cos(heading*DEG2RAD), -sin(heading*DEG2RAD)};
+  // filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
+  filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
 
-  // update u matrix                      
-  accEN = CoordinateTransform*accRP;
-  omega(0) = heading;
+  q0 = (double) filter.q0;
+  q1 = (double) filter.q1;
+  q2 = (double) filter.q2;
+  q3 = (double) filter.q3;
+     
+  accRPY(0) = ax;
+  accRPY(1) = ay;
+  accRPY(2) = az;
+
+  // Transform accRPY to accEND
+  
+
   
   // update F matrix
-  f(0,2) = deltaTime;
-  f(1,3) = deltaTime;
+  f(0,3) = deltaTime;
+  f(1,4) = deltaTime;
+  f(2,5) = deltaTime;
 
   // update B matrix
-  B(0,0) = 0.5*pow(deltaTime,2);
-  B(1,1) = B(0,0);
-  B(2,0) = deltaTime;
-  B(3,1) = deltaTime;
+  b(0,0) = 0.5*pow(deltaTime,2);
+  b(1,1) = b(0,0);
+  b(2,2) = b(0,0);
+  b(3,0) = deltaTime;
+  b(4,1) = deltaTime;
+  b(5,2) = deltaTime;
 
-  x = f*x + B*u;
-  P = f*P*~f + Q;
+  x = f*x + b*u;
+  p = f*p*~f + Q;
 }
 
-void updateKalman() {
-  getGPSObservations();
-  S = H*P*~H + R;
-  Invert(S);
-  K = P*(~H)*S;
-  x += K*(zGPS - H*x);
-  J = I-K*H;
-  P = J*P*~J + K*R*~K;
+void updateKalmanBaro() {
+  
+}
+
+void updateKalmanGPS() {
+
+}
+
+void getBaroObservations() {
+  zBaro(0) = -BMP.readAltitude(localAirPressure);
 }
 
 void getGPSObservations() {
@@ -220,14 +199,5 @@ void getGPSObservations() {
   double dlon = (double) flon;
   zGPS(0) = radiusEarth*dlon*DEG2RAD*cosInitialLat; // E in NED
   zGPS(1) = radiusEarth*dlat*DEG2RAD; // N in NED
-  zGPS(2) = (GPS.f_speed_mps()) * sin(GPS.f_course() * DEG2RAD);
-  zGPS(3) = (GPS.f_speed_mps()) * cos(GPS.f_course() * DEG2RAD);
-  zGPS(4) = GPS.f_course(); // Yaw angle with respect to N in NED
-}
-
-void velocityWatchdog() {
-  if (abs(x(2)) > 50 || abs(x(3)) > 50) {
-    x(2) = 0;
-    x(3) = 0;
-  }
+  zGPS(2) = (double) GPS.f_altitude();
 }

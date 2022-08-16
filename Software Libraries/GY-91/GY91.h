@@ -108,11 +108,9 @@ private:
     float accelGet(uint8_t highIndex, uint8_t lowIndex);
     float gyroGet(uint8_t highIndex, uint8_t lowIndex);
     int16_t magGet(uint8_t highIndex, uint8_t lowIndex);
-    void magEnableSlaveMode();
-    void magReadAdjustValues();
-    void magWakeup();
     uint8_t i2cRead(uint8_t Address, uint8_t Register, uint8_t Nbytes, uint8_t* Data);
     uint8_t i2cWriteByte(uint8_t Address, uint8_t Register, uint8_t Data);
+
 public:
     GY91(uint8_t address = MPU9250_ADDRESS_AD0_LOW);
     const uint8_t address;
@@ -143,7 +141,8 @@ public:
     float magY();
     float magZ();
 
-    double getTemperature
+    double readPressure();
+    double calcAltitude(double pressure, double seaLevelhPa);
 };
 
 GY91::GY91(/* args */)
