@@ -193,11 +193,29 @@ void predictKalman() {
 }
 
 void updateKalmanBaro() {
-  
+  getBaroObservation();
+  BLA::Matrix<NUM_OBS_BARO, NUM_STATES, Array<NUM_OBS_BARO,NUM_STATES,double> > h;
+  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO,NUM_OBS_BARO,double> > r;
+  BLA::Matrix<NUM_STATES, NUM_OBS_BARO, Array<NUM_STATES, NUM_OBS_BARO,double> > k;
+  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO, NUM_OBS_BARO,double> > temp;
+
+  temp = h*p*~h + r;
+  k = p*~h*Inverse(temp);
+  x += k*(zBaro - h*x);
+  p = (I-k*h)*p;
 }
 
 void updateKalmanGPS() {
+  getGPSObservation();
+  BLA::Matrix<NUM_OBS_GPS, NUM_STATES, Array<NUM_OBS_GPS,NUM_STATES,double> > h;
+  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS,NUM_OBS_GPS,double> > r;
+  BLA::Matrix<NUM_STATES, NUM_OBS_GPS, Array<NUM_STATES, NUM_OBS_GPS,double> > k;
+  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS, NUM_OBS_GPS,double> > temp;
 
+  temp = h*p*~h + r;
+  k = p*~h*Inverse(temp);
+  x += k*(zGPS - h*x);
+  p = (I-k*h)*p;
 }
 
 void getBaroObservations() {
