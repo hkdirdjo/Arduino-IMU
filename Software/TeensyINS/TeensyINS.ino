@@ -15,7 +15,6 @@ using namespace BLA;
 
 // Definitions
 #define HWSERIAL Serial1
-#define MICROS 1000000
 // GPS Module Update Rate Commands
 #define PMTK_SET_NMEA_UPDATE_1HZ "$PMTK220,1000*1F" ///<  1 Hz
 #define PMTK_SET_NMEA_UPDATE_5HZ "$PMTK220,200*2C"  ///<  5 Hz
@@ -29,14 +28,14 @@ double radiusEarth = 6371000; // metres
 const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
 const int debugRate = 5; // Hz
-unsigned long microsPerFilter = MICROS/predictRate;
-unsigned long microsPerUpdate = MICROS/updateRate;
-unsigned long microsPerDebug = MICROS/debugRate;
+unsigned long microsPerFilter = 1000000/predictRate;
+unsigned long microsPerUpdate = 1000000/updateRate;
+unsigned long microsPerDebug = 1000000/debugRate;
 double deltaTime = 1.0/(double)predictRate; // seconds
 double aR, aP, aY;
 double gR, gP, gY;
 double mR, mP, mY;
-double q0, q1, q2, q3; // normalized rotation quaternion provided by the Madgwick AHRS
+double q_0, q_1, q_2, q_3; // normalized rotation quaternion provided by the Madgwick AHRS
 float flat, flon; unsigned long age; // variables needed for TinyGPS
 
 const double localAirPressure = (double) 1013.25; // in hPa - must update to local conditions before use!
@@ -76,7 +75,7 @@ BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1
                                                                                0.0, 0.0, 0.0, 0.0, 1.0, 0.0,                                                                               
                                                                                0.0, 0.0, 0.0, 0.0, 0.0, 1.0};                                                                               
 BLA::Matrix<NUM_STATES, NUM_COM, Array<NUM_STATES,NUM_COM,double> > b;
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > Q = {8.0, 0.0, 0.0, 0.0, 0.0,
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > q = {8.0, 0.0, 0.0, 0.0, 0.0,
                                                                                0.0, 8.0, 0.0, 0.0, 0.0,
                                                                                0.0, 0.0, 5.0, 0.0, 0.0,
                                                                                0.0, 0.0, 0.0, 5.0, 0.0,
@@ -136,32 +135,45 @@ void predictKalman() {
   MPU.magUpdate();
 
   // Convert to Body Coordinates and correct units
-  ax = MPU.accelY()*Gs2SI; // ROLL
-  ay = MPU.accelX()*Gs2SI; // PITCH
-  az = -MPU.accelZ()*Gs2SI;// YAW
-  gx = MPU.gyroY();
-  gy = MPU.gyroX();
-  gz = -MPU.gyroZ();
-  mx = MPU.magX();
-  my = MPU.magY();
-  mz = MPU.magZ();
+  aR = MPU.accelY()*Gs2SI; // ROLL
+  aP = MPU.accelX()*Gs2SI; // PITCH
+  aY = -MPU.accelZ()*Gs2SI;// YAW
+  gR = MPU.gyroY();
+  gP = MPU.gyroX();
+  gY = -MPU.gyroZ();
+  mR = MPU.magX();
+  mP = MPU.magY();
+  mY = MPU.magZ();
   
   // update the filter, which computes orientation
   // filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
-  filter.update(-gx, -gy, -gz, ax, ay, az, mx, my, mz);
+  filter.update(-gR, -gP, -gY, aR, aP, aY, mR, mP, mY);
 
-  q0 = (double) filter.q0;
-  q1 = (double) filter.q1;
-  q2 = (double) filter.q2;
-  q3 = (double) filter.q3;
+  accRPY(0) = aR;
+  accRPY(1) = aP;
+  accRPY(2) = aY;
+
+  q_0 = (double) filter.q0;
+  q_1 = (double) filter.q1;
+  q_2 = (double) filter.q2;
+  q_3 = (double) filter.q3;
      
-  accRPY(0) = ax;
-  accRPY(1) = ay;
-  accRPY(2) = az;
-
   // Transform accRPY to accEND
-  
+  // Using formula provided here; https://www.weizmann.ac.il/sci-tea/benari/sites/sci-tea.benari/files/uploads/softwareAndLearningMaterials/quaternion-tutorial-2-0-1.pdf
+  double q0q0 = q_0 * q_0;
+  double q0q1 = q_0 * q_1;
+  double q0q2 = q_0 * q_2;
+  double q0q3 = q_0 * q_3;
+  double q1q1 = q_1 * q_1;
+  double q1q2 = q_1 * q_2;
+  double q1q3 = q_1 * q_3;
+  double q2q2 = q_2 * q_2;
+  double q2q3 = q_2 * q_3;
+  double q3q3 = q_3 * q_3;
 
+  u(0) =   accRPY(0)*(q0q0+q1q1-q2q2-q3q3) + 2*accRPY(1)*(q1q2-q0q3)           + 2*accRPY(2)*(q0q2+q1q3)          ;
+  u(1) = 2*accRPY(0)*(q0q3+q1q2)           +   accRPY(1)*(q0q0-q1q1+q2q2-q3q3) + 2*accRPY(2)*(q2q3-q0q1)          ;
+  u(2) = 2*accRPY(0)*(q1q3-q0q2)           + 2*accRPY(1)*(q0q1+q2q3)           + 2*accRPY(2)*(q0q0-q1q1-q2q2+q3q3);
   
   // update F matrix
   f(0,3) = deltaTime;
@@ -177,7 +189,7 @@ void predictKalman() {
   b(5,2) = deltaTime;
 
   x = f*x + b*u;
-  p = f*p*~f + Q;
+  p = f*p*~f + q;
 }
 
 void updateKalmanBaro() {
