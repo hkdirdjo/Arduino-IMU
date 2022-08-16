@@ -173,7 +173,7 @@ void predictKalman() {
 
   u(0) =   accRPY(0)*(q0q0+q1q1-q2q2-q3q3) + 2*accRPY(1)*(q1q2-q0q3)           + 2*accRPY(2)*(q0q2+q1q3)          ;
   u(1) = 2*accRPY(0)*(q0q3+q1q2)           +   accRPY(1)*(q0q0-q1q1+q2q2-q3q3) + 2*accRPY(2)*(q2q3-q0q1)          ;
-  u(2) = 2*accRPY(0)*(q1q3-q0q2)           + 2*accRPY(1)*(q0q1+q2q3)           + 2*accRPY(2)*(q0q0-q1q1-q2q2+q3q3);
+  u(2) = 2*accRPY(0)*(q1q3-q0q2)           + 2*accRPY(1)*(q0q1+q2q3)           +   accRPY(2)*(q0q0-q1q1-q2q2+q3q3);
   
   // update F matrix
   f(0,3) = deltaTime;
