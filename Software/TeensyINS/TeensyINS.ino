@@ -122,7 +122,9 @@ void loop() {
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
     // Predict debugging
     // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
-    Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
+    // Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
+    Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + ",");
+    Serial.println( String(u(0),2) + "," + String(u(1),2) );
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -157,8 +159,8 @@ void predictKalman() {
   accRPY(1) = aP;
   accRPY(2) = aY;
 
+// TODO Condense
   BLA::Matrix<4,1,Array<4,1,double>> q_AHRS;
-
   q_AHRS(0) = (double) filter.q0;
   q_AHRS(1) = (double) filter.q1;
   q_AHRS(2) = (double) filter.q2;
