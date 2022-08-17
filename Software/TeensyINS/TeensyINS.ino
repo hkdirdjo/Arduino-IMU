@@ -12,6 +12,7 @@ using namespace BLA;
 #include <TinyGPS.h>
 #include <MadgwickAHRS.h>
 #include <Chrono.h>
+#include <QuaternionForINS.h>
 
 // Definitions
 #define HWSERIAL Serial1
@@ -27,7 +28,7 @@ bool newGPSData = false;
 double radiusEarth = 6371000; // metres
 const int predictRate = 50; // Hz
 const int updateRate = 1; // Hz
-const int debugRate = 5; // Hz
+const int debugRate = 10; // Hz
 unsigned long microsPerFilter = 1000000/predictRate;
 unsigned long microsPerUpdate = 1000000/updateRate;
 unsigned long microsPerDebug = 1000000/debugRate;
@@ -66,6 +67,8 @@ BLA::Matrix<NUM_STATES, 1, Array<NUM_STATES,1,double> > x; // posE posN posD vel
   auto velEND = x.Submatrix<3, 1>(3, 0);
 BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > u; // accE accN accD
 BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > accRPY;
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > gRPY;
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > gNED = {0.0, 0.0, 9.81};
 BLA::Matrix<NUM_OBS_GPS, 1, Array<NUM_OBS_GPS,1,double> > zGPS; // posE, posN, posD
 BLA::Matrix<NUM_OBS_BARO,1, Array<NUM_OBS_BARO,1,double> > zBaro; // posD
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -118,7 +121,8 @@ void loop() {
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
     // Predict debugging
-    Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
+    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
+    Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -141,9 +145,9 @@ void predictKalman() {
   gR = MPU.gyroY();
   gP = MPU.gyroX();
   gY = -MPU.gyroZ();
-  mR = MPU.magX();
-  mP = MPU.magY();
-  mY = MPU.magZ();
+  mR = -MPU.magX();
+  mP = -MPU.magY();
+  mY = -MPU.magZ();
   
   // update the filter, which computes orientation
   // filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
@@ -153,28 +157,20 @@ void predictKalman() {
   accRPY(1) = aP;
   accRPY(2) = aY;
 
-  q_0 = (double) filter.q0;
-  q_1 = (double) filter.q1;
-  q_2 = (double) filter.q2;
-  q_3 = (double) filter.q3;
-     
-  // Transform accRPY to accEND
-  // Using formula provided here; https://www.weizmann.ac.il/sci-tea/benari/sites/sci-tea.benari/files/uploads/softwareAndLearningMaterials/quaternion-tutorial-2-0-1.pdf
-  double q0q0 = q_0 * q_0;
-  double q0q1 = q_0 * q_1;
-  double q0q2 = q_0 * q_2;
-  double q0q3 = q_0 * q_3;
-  double q1q1 = q_1 * q_1;
-  double q1q2 = q_1 * q_2;
-  double q1q3 = q_1 * q_3;
-  double q2q2 = q_2 * q_2;
-  double q2q3 = q_2 * q_3;
-  double q3q3 = q_3 * q_3;
+  BLA::Matrix<4,1,Array<4,1,double>> q_AHRS;
 
-  u(0) =   accRPY(0)*(q0q0+q1q1-q2q2-q3q3) + 2*accRPY(1)*(q1q2-q0q3)           + 2*accRPY(2)*(q0q2+q1q3)          ;
-  u(1) = 2*accRPY(0)*(q0q3+q1q2)           +   accRPY(1)*(q0q0-q1q1+q2q2-q3q3) + 2*accRPY(2)*(q2q3-q0q1)          ;
-  u(2) = 2*accRPY(0)*(q1q3-q0q2)           + 2*accRPY(1)*(q0q1+q2q3)           +   accRPY(2)*(q0q0-q1q1-q2q2+q3q3);
+  q_AHRS(0) = (double) filter.q0;
+  q_AHRS(1) = (double) filter.q1;
+  q_AHRS(2) = (double) filter.q2;
+  q_AHRS(3) = (double) filter.q3;
+
+  Quaternion RPYtoNED(q_AHRS);
+  Quaternion NEDtoRPY(RPYtoNED.Inverse());
   
+  gRPY = NEDtoRPY.Rotate(gNED);
+  accRPY -= gRPY;
+  u = RPYtoNED.Rotate(accRPY);
+ 
   // update F matrix
   f(0,3) = deltaTime;
   f(1,4) = deltaTime;
@@ -193,7 +189,7 @@ void predictKalman() {
 }
 
 void updateKalmanBaro() {
-  getBaroObservation();
+  getBaroObservations();
   BLA::Matrix<NUM_OBS_BARO, NUM_STATES, Array<NUM_OBS_BARO,NUM_STATES,double> > h;
   BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO,NUM_OBS_BARO,double> > r;
   BLA::Matrix<NUM_STATES, NUM_OBS_BARO, Array<NUM_STATES, NUM_OBS_BARO,double> > k;
@@ -206,7 +202,7 @@ void updateKalmanBaro() {
 }
 
 void updateKalmanGPS() {
-  getGPSObservation();
+  getGPSObservations();
   BLA::Matrix<NUM_OBS_GPS, NUM_STATES, Array<NUM_OBS_GPS,NUM_STATES,double> > h;
   BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS,NUM_OBS_GPS,double> > r;
   BLA::Matrix<NUM_STATES, NUM_OBS_GPS, Array<NUM_STATES, NUM_OBS_GPS,double> > k;
