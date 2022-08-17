@@ -39,7 +39,7 @@ double mR, mP, mY;
 double q_0, q_1, q_2, q_3; // normalized rotation quaternion provided by the Madgwick AHRS
 float flat, flon; unsigned long age; // variables needed for TinyGPS
 
-const double localAirPressure = 1013.60; // in hPa - must update to local conditions before use!
+const double localAirPressure = 1016.00; // in hPa - must update to local conditions before use!
 
 // Unit Conversions
 const double DEG2RAD = PI / 180.0;
@@ -68,7 +68,7 @@ BLA::Matrix<NUM_STATES, 1, Array<NUM_STATES,1,double> > x; // posE posN posD vel
 BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > u; // accE accN accD
 BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > accRPY;
 BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > gRPY;
-BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > gNED = {0.0, 0.0, 9.81};
+BLA::Matrix<NUM_COM, 1, Array<NUM_COM,1,double> > gNED = {0.0, 0.0, 9.51};
 BLA::Matrix<NUM_OBS_GPS, 1, Array<NUM_OBS_GPS,1,double> > zGPS; // posE, posN, posD
 BLA::Matrix<NUM_OBS_BARO,1, Array<NUM_OBS_BARO,1,double> > zBaro; // posD
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -78,11 +78,12 @@ BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > f = {1
                                                                                0.0, 0.0, 0.0, 0.0, 1.0, 0.0,                                                                               
                                                                                0.0, 0.0, 0.0, 0.0, 0.0, 1.0};                                                                               
 BLA::Matrix<NUM_STATES, NUM_COM, Array<NUM_STATES,NUM_COM,double> > b;
-BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > q = {8.0, 0.0, 0.0, 0.0, 0.0,
-                                                                               0.0, 8.0, 0.0, 0.0, 0.0,
-                                                                               0.0, 0.0, 5.0, 0.0, 0.0,
-                                                                               0.0, 0.0, 0.0, 5.0, 0.0,
-                                                                               0.0, 0.0, 0.0, 0.0, 5.0};// model covariance
+BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > q = {8.1, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 8.2, 0.0, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 8.3, 0.0, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 5.2, 0.0, 0.0,
+                                                                               0.0, 0.0, 0.0, 0.0, 5.3, 0.0,
+                                                                               0.0, 0.0, 0.0, 0.0, 0.0, 5.3};// model covariance
 BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > p;
 BLA::Identity<NUM_STATES, NUM_STATES> I;
 
@@ -125,21 +126,24 @@ void loop() {
   }
   if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
     if (newGPSData) {
-      getGPSObservations();
+      updateKalmanGPS();
       newGPSData = false;  
     }
-    getBaroObservations();
+    updateKalmanBaro();
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
     // Predict debugging
     // Serial.println( String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); 
     // Serial.println( String(zGPS(0),2) + "," + String(zGPS(1),2)+ "," + String(zGPS(2),2) ); 
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); 
+    Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2));
+    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) ); 
     // Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
     // Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + ",");
-    // Serial.println( String(u(0),2) + "," + String(u(1),2) );
+    // Serial.println( String(u(0),2) + "," + String(u(1),2) + "," + String(u(2),2));
     // Serial.println(zBaro(0));
-    //Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
+    // Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
+    // Serial.println( String(p(0,0),2) + "," + String(p(1,1),2) + "," + String(p(2,2),2) + "," + String(p(3,3),2) + "," + String(p(4,4),2) + "," + String(p(5,5),2) );
+    // Serial.println( String(q(1,1),2) );
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -167,7 +171,6 @@ void predictKalman() {
   mY = -MPU.magZ();
   
   // update the filter, which computes orientation
-  // filter.updateIMU(-gx, -gy, -gz, ax, ay, az);
   filter.update(-gR, -gP, -gY, aR, aP, aY, mR, mP, mY);
 
   accRPY(0) = aR;
@@ -175,12 +178,10 @@ void predictKalman() {
   accRPY(2) = aY;
 
   BLA::Matrix<4,1,Array<4,1,double>> q_AHRS;
-
   q_AHRS(0) = (double) filter.q0;
   q_AHRS(1) = (double) filter.q1;
   q_AHRS(2) = (double) filter.q2;
   q_AHRS(3) = (double) filter.q3;
-  
   Quaternion RPYtoNED(q_AHRS);
   Quaternion NEDtoRPY(RPYtoNED.Inverse());
   
@@ -205,32 +206,6 @@ void predictKalman() {
   p = f*p*~f + q;
 }
 
-void updateKalmanBaro() {
-  getBaroObservations();
-  BLA::Matrix<NUM_OBS_BARO, NUM_STATES, Array<NUM_OBS_BARO,NUM_STATES,double> > h;
-  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO,NUM_OBS_BARO,double> > r;
-  BLA::Matrix<NUM_STATES, NUM_OBS_BARO, Array<NUM_STATES, NUM_OBS_BARO,double> > k;
-  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO, NUM_OBS_BARO,double> > temp;
-
-  temp = h*p*~h + r;
-  k = p*~h*Inverse(temp);
-  x += k*(zBaro - h*x);
-  p = (I-k*h)*p;
-}
-
-void updateKalmanGPS() {
-  getGPSObservations();
-  BLA::Matrix<NUM_OBS_GPS, NUM_STATES, Array<NUM_OBS_GPS,NUM_STATES,double> > h;
-  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS,NUM_OBS_GPS,double> > r;
-  BLA::Matrix<NUM_STATES, NUM_OBS_GPS, Array<NUM_STATES, NUM_OBS_GPS,double> > k;
-  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS, NUM_OBS_GPS,double> > temp;
-
-  temp = h*p*~h + r;
-  k = p*~h*Inverse(temp);
-  x += k*(zGPS - h*x);
-  p = (I-k*h)*p;
-}
-
 void getBaroObservations() {
   zBaro(0) = -BMP.readAltitude(localAirPressure);
 }
@@ -243,4 +218,39 @@ void getGPSObservations() {
   zGPS(0) = radiusEarth*dlon*DEG2RAD*cosInitialLat; // E in NED
   zGPS(1) = radiusEarth*dlat*DEG2RAD; // N in NED
   zGPS(2) = (double) GPS.f_altitude();
+}
+
+
+void updateKalmanBaro() {
+  getBaroObservations();
+  BLA::Matrix<NUM_OBS_BARO, NUM_STATES, Array<NUM_OBS_BARO,NUM_STATES,double> > h = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
+  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO,NUM_OBS_BARO,double> > r = {1.0};
+  BLA::Matrix<NUM_STATES, NUM_OBS_BARO, Array<NUM_STATES, NUM_OBS_BARO,double> > k;
+  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, Array<NUM_OBS_BARO, NUM_OBS_BARO,double> > temp;
+  BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > temp2;
+
+  temp = h*p*~h + r;
+  k = p*~h*Inverse(temp);
+  x += k*(zBaro - h*x);
+  temp2 = I-k*h;
+  p = temp2*p*~temp2 + k*r*~k;
+}
+
+void updateKalmanGPS() {
+  getGPSObservations();
+  BLA::Matrix<NUM_OBS_GPS, NUM_STATES, Array<NUM_OBS_GPS,NUM_STATES,double> > h = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                                                                   0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+                                                                                   0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
+  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS,NUM_OBS_GPS,double> > r = {3.24, 0.00, 0.00,
+                                                                                     0.00, 3.24, 0.00,
+                                                                                     0.00, 0.00, 11.37};
+  BLA::Matrix<NUM_STATES, NUM_OBS_GPS, Array<NUM_STATES, NUM_OBS_GPS,double> > k;
+  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS, NUM_OBS_GPS,double> > temp;
+  BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > temp2;
+
+  temp = h*p*~h + r;
+  k = p*~h*Inverse(temp);
+  x += k*(zGPS - h*x);
+  temp2 = I-k*h;
+  p = temp2*p*~temp2 + k*r*~k;
 }
