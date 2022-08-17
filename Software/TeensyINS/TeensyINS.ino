@@ -39,7 +39,7 @@ double mR, mP, mY;
 double q_0, q_1, q_2, q_3; // normalized rotation quaternion provided by the Madgwick AHRS
 float flat, flon; unsigned long age; // variables needed for TinyGPS
 
-const double localAirPressure = (double) 1013.25; // in hPa - must update to local conditions before use!
+const double localAirPressure = 1013.60; // in hPa - must update to local conditions before use!
 
 // Unit Conversions
 const double DEG2RAD = PI / 180.0;
@@ -96,6 +96,15 @@ void setup() {
   MPU.beginAccel();
   MPU.beginGyro();
   MPU.beginMag();
+  
+  BMP.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
+  
+  /* Default settings from datasheet. */
+  BMP.setSampling(Adafruit_BMP280::MODE_FORCED,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
 
   // Boost GPS Update Rate to 5Hz
   // HWSERIAL.println(PMTK_SET_NMEA_UPDATE_5HZ);
@@ -116,15 +125,21 @@ void loop() {
   }
   if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
     if (newGPSData) {
+      getGPSObservations();
       newGPSData = false;  
     }
+    getBaroObservations();
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
     // Predict debugging
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2) ); 
-    // Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
-    Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + ",");
-    Serial.println( String(u(0),2) + "," + String(u(1),2) );
+    // Serial.println( String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); 
+    //  Serial.println( String(zGPS(0),2) + "," + String(zGPS(1),2)+ "," + String(zGPS(2),2) ); 
+    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); 
+    // Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) );
+    // Serial.print(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + ",");
+    // Serial.println( String(u(0),2) + "," + String(u(1),2) );
+    // Serial.println(zBaro(0));
+    Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
   }
   if (HWSERIAL.available()) {
     char c = HWSERIAL.read();
@@ -159,13 +174,13 @@ void predictKalman() {
   accRPY(1) = aP;
   accRPY(2) = aY;
 
-// TODO Condense
   BLA::Matrix<4,1,Array<4,1,double>> q_AHRS;
+
   q_AHRS(0) = (double) filter.q0;
   q_AHRS(1) = (double) filter.q1;
   q_AHRS(2) = (double) filter.q2;
   q_AHRS(3) = (double) filter.q3;
-
+  
   Quaternion RPYtoNED(q_AHRS);
   Quaternion NEDtoRPY(RPYtoNED.Inverse());
   
