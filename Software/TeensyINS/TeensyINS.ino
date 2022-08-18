@@ -135,12 +135,12 @@ void loop() {
     // Predict debugging
     // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) ); // Position State
     // Serial.println( String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); // Velocity State
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2));
+    Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2));
     // Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) ); // AHRS
     // Serial.println( String(u(0),2) + "," + String(u(1),2) + "," + String(u(2),2)); // Accelerometer Readings
     // Serial.println(zBaro(0)); // Barometer Reading
     // Serial.println( String(zGPS(0),2) + "," + String(zGPS(1),2)+ "," + String(zGPS(2),2) ); // GPS Readings
-    Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
+    // Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
     // Serial.println( String(p(0,0),2) + "," + String(p(1,1),2) + "," + String(p(2,2),2) + "," + String(p(3,3),2) + "," + String(p(4,4),2) + "," + String(p(5,5),2) );
     // Serial.println( String(q(1,1),2) );
   }
