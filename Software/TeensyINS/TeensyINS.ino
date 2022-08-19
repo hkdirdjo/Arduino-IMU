@@ -1,4 +1,4 @@
-/*
+ /*
  * Teensy-based INS by Husayn Kartodirdjo
  * Sensors: GY-91 (MPU9250 and BMP280) and Adafruit Ultimate GPS Board v3
  * North-East-Down reference frame for Inertial Reference Frame
@@ -12,7 +12,7 @@ using namespace BLA;
 #include <TinyGPS.h>
 #include <MadgwickAHRS.h>
 #include <Chrono.h>
-#include <QuaternionForINS.h>
+#include <BLAforQUAT.h>
 
 // Definitions
 #define HWSERIAL Serial1
@@ -24,11 +24,12 @@ using namespace BLA;
 
 // Global Variables
 double cosInitialLat = 49.20689; // Vancouver
+int GPSLock;
 bool newGPSData = false;
 double radiusEarth = 6371000; // metres
-const int predictRate = 50; // Hz
+const int predictRate = 200; // Hz
 const int updateRate = 1; // Hz
-const int debugRate = 10; // Hz
+const int debugRate = 5; // Hz
 unsigned long microsPerFilter = 1000000/predictRate;
 unsigned long microsPerUpdate = 1000000/updateRate;
 unsigned long microsPerDebug = 1000000/debugRate;
@@ -39,7 +40,7 @@ double mR, mP, mY;
 double q_0, q_1, q_2, q_3; // normalized rotation quaternion provided by the Madgwick AHRS
 float flat, flon; unsigned long age; // variables needed for TinyGPS
 
-const double localAirPressure = 1016.00; // in hPa - must update to local conditions before use!
+const double localAirPressure = 1013.00; // in hPa - must update to local conditions before use!
 
 // Unit Conversions
 const double DEG2RAD = PI / 180.0;
@@ -108,8 +109,8 @@ void setup() {
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
 
   // Boost GPS Update Rate to 5Hz
-  // HWSERIAL.println(PMTK_SET_NMEA_UPDATE_5HZ);
-  // HWSERIAL.println(PMTK_API_SET_FIX_CTL_5HZ);
+  //HWSERIAL.println(PMTK_SET_NMEA_UPDATE_5HZ);
+  //HWSERIAL.println(PMTK_API_SET_FIX_CTL_5HZ);
 
   filter.begin(predictRate);
 
@@ -127,15 +128,19 @@ void loop() {
   if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
     if (newGPSData) {
       updateKalmanGPS();
-      newGPSData = false;  
+      newGPSData = false;
+      GPSLock = 1;  
+    }
+    else {
+      GPSLock = 0;
     }
     updateKalmanBaro();
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)) {
     // Predict debugging
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) ); // Position State
+    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) ); // Position Statekk
     // Serial.println( String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); // Velocity State
-    Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2));
+     Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) + "," + String(GPSLock) );
     // Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) ); // AHRS
     // Serial.println( String(u(0),2) + "," + String(u(1),2) + "," + String(u(2),2)); // Accelerometer Readings
     // Serial.println(zBaro(0)); // Barometer Reading
@@ -242,7 +247,7 @@ void updateKalmanGPS() {
                                                                                    0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
   BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS,NUM_OBS_GPS,double> > r = {3.24, 0.00, 0.00,
                                                                                      0.00, 3.24, 0.00,
-                                                                                     0.00, 0.00, 11.37};
+                                                                                     0.00, 0.00, 11.4};
   BLA::Matrix<NUM_STATES, NUM_OBS_GPS, Array<NUM_STATES, NUM_OBS_GPS,double> > k;
   BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, Array<NUM_OBS_GPS, NUM_OBS_GPS,double> > temp;
   BLA::Matrix<NUM_STATES, NUM_STATES, Array<NUM_STATES,NUM_STATES,double> > temp2;
