@@ -89,8 +89,8 @@ void setup() {
   Serial.begin(115200); // For debugging
   
   GPS.begin(9600); // for GPS
-  // GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGAGSA);
-  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGAGSA);
+  //GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
   GPS.sendCommand(PMTK_SET_BAUD_57600);
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_5HZ);
   GPS.sendCommand(PMTK_API_SET_FIX_CTL_5HZ );
@@ -117,8 +117,6 @@ void loop() {
   if (chronoFilter.hasPassed(microsPerFilter,true)) {
     readPredictSensors();
 
-    // Serial.println(deltaTime);
-
     // update F matrix
     Filter.f(0,3) = deltaTime;
     Filter.f(1,4) = deltaTime;
@@ -131,8 +129,6 @@ void loop() {
     Filter.b(3,0) = deltaTime;
     Filter.b(4,1) = deltaTime;
     Filter.b(5,2) = deltaTime;
-
-    u = {1.0,0.0,0.0};
 
     Filter.predict(u);
   }
@@ -150,7 +146,7 @@ void loop() {
   }
   if (chronoDebug.hasPassed(microsPerDebug,true)){
     // Serial.println( String(accRPY(0)) + " " + String(accRPY(1)) + " " + String(accRPY(2)) + " " + String(magnitudeAccRPY) + " " + String(accNED(0)) + " " + String(accNED(1)) + " " + String(accNED(2)) + " " + String(magnitudeAccNED)  + " " + String(u(0)) + " " +String(u(1)) + " " +String(u(2)) + " " + String(magnitudeU) + " " + String(AHRSfilter.getRoll(),2) + " " + String(AHRSfilter.getPitch(),2) + " " +String(AHRSfilter.getYaw(),2));
-    // Serial.println( String(Filter.x(0),2) + "," + String(Filter.x(1),2) + "," + String(Filter.x(2),2) ); // Position State
+    Serial.println( String(Filter.x(0),2) + "," + String(Filter.x(1),2) + "," + String(Filter.x(2),2) ); // Position State
     // Serial.println( zGPS ); // GPS Readings
     // Serial.println(newGPSData);
     // Serial.println( String(Filter.x(3),2) + "," + String(Filter.x(4),2) + "," + String(Filter.x(5),2) ); // Velocity State
@@ -201,8 +197,6 @@ void getGPSObservations() {
   zGPS(0) = radiusEarth*dlon*DEG2RAD*cosInitialLat; // E in NED
   zGPS(1) = radiusEarth*dlat*DEG2RAD; // N in NED
   zGPS(2) = (double) GPS.altitude;
-
-  // Serial.println( zGPS ); // GPS Readings
 }
 
 
