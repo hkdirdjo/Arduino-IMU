@@ -14,22 +14,26 @@
 #include <MadgwickAHRS.h>       // AHRS
 #include <Chrono.h>             // Timing
 #include <BLAforQUAT.h>         // Quaternion Operations
+#include <BLAforKalman.h>       // Kalman Filter
 
 // DEFINITIONS
 #define HWSerial Serial1
 
 // USER INPUTS
 double cosInitialLat = 43.4675; // Oakville, ON
-const int predictRate = 200; // Hz
-const int updateRate = 10; // Hz
+const int predictRate = 20; // Hz
+const int updateGPSRate = 10; // Hz
+const int updateBaroRate = 20; // Hz
 const int debugRate = 10; // Hz
-const double localAirPressure = 1013.00; // in hPa - must update to local conditions before use!
+const double localAirPressure = 1025.00; // in hPa - must update to local conditions before use!
 
 // CONSTANTS
+double deltaTime = 1.0/(double)predictRate; // seconds
 const double radiusEarth = 6371000; // metres
 const unsigned long microsPerFilter = 1000000/predictRate;
-const unsigned long microsPerUpdate = 1000000/updateRate;
-const unsigned long microsPerDebug = 1000000/debugRate;
+const unsigned long microsPerGPSUpdate = 1000000/updateGPSRate;
+const unsigned long microsPerBaroUpdate = 1000000/updateBaroRate;
+const unsigned long microsPerDebug  = 1000000/debugRate;
 // Unit Conversions
 const double DEG2RAD = PI / 180.0;
 const double RAD2DEG = 180.0 / 3.14159;
@@ -44,18 +48,13 @@ const int NUM_COM = 3;
 // GLOBALS
 int GPSLock;
 bool newGPSData = false;
-double deltaTime = 1.0/(double)predictRate; // seconds
-double aR, aP, aY;
-double gR, gP, gY;
-double mR, mP, mY;
-double q_0, q_1, q_2, q_3; // normalized rotation quaternion provided by the Madgwick AHRS
-BLA::Matrix<NUM_STATES, 1, double > x; // posE posN posD velE velN velD
-  auto posEND = x.Submatrix<3, 1>(0, 0);
-  auto velEND = x.Submatrix<3, 1>(3, 0);
-BLA::Matrix<NUM_COM, 1, double > u; // accE accN accD
-BLA::Matrix<NUM_COM, 1, double > accRPY;
+BLA::Matrix<NUM_COM, 1, double > accRPY; // aR, aP, aY
+BLA::Matrix<NUM_COM, 1, double > gyroRPY; // gR, gP, gY
+BLA::Matrix<NUM_COM, 1, double > magRPY; // mR, mP, mY
 BLA::Matrix<NUM_COM, 1, double > gRPY;
-BLA::Matrix<NUM_COM, 1, double > gNED = {0.0, 0.0, 9.51};
+BLA::Matrix<NUM_COM, 1, double > accNED;
+BLA::Matrix<NUM_COM, 1, double > u; // accE accN accD, accNED after gravity has been removed
+BLA::Matrix<NUM_COM, 1, double > gNED = {0.0, 0.0, 9.50};
 BLA::Matrix<NUM_OBS_GPS, 1, double > zGPS; // posE, posN, posD
 BLA::Matrix<NUM_OBS_BARO,1, double > zBaro; // posD
 BLA::Matrix<NUM_STATES, NUM_STATES, double >                              f = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -72,23 +71,29 @@ BLA::Matrix<NUM_STATES, NUM_STATES, double >                              q = {8
                                                                                0.0, 0.0, 0.0, 0.0, 5.3, 0.0,
                                                                                0.0, 0.0, 0.0, 0.0, 0.0, 5.3};// model covariance
 BLA::Matrix<NUM_STATES, NUM_STATES, double > p;
-BLA::Eye<NUM_STATES, NUM_STATES,double> I; // should be type Eye?
+BLA::Eye<NUM_STATES, NUM_STATES,double> I;
 
 // Initialize Objects
 Madgwick AHRSfilter;
 MPU9250_asukiaaa MPU;
 Adafruit_BMP280 BMP;
 Chrono chronoFilter(Chrono::MICROS);
-Chrono chronoUpdate(Chrono::MICROS);
+Chrono chronoUpdateGPS(Chrono::MICROS);
+Chrono chronoUpdateBaro(Chrono::MICROS);
 Chrono chronoDebug(Chrono::MICROS);
-Adafruit_GPS GPS(&HWSerial); // For GPS
+Chrono chronoDebugElapsed(Chrono::MICROS);
+Adafruit_GPS GPS(&HWSerial); 
+KalmanFilter<NUM_STATES, NUM_OBS_GPS, NUM_OBS_BARO, NUM_COM> Filter(f,q,p,b);
 
 void setup() {
   Serial.begin(115200); // For debugging
   
-  GPS.begin(9600); 
-  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
-  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_10HZ);
+  GPS.begin(9600); // for GPS
+  // GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGAGSA);
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
+  GPS.sendCommand(PMTK_SET_BAUD_57600);
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_5HZ);
+  GPS.sendCommand(PMTK_API_SET_FIX_CTL_5HZ );
   
   Wire.begin(); // For GY-91
   MPU.beginAccel();
@@ -101,48 +106,60 @@ void setup() {
                   Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
                   Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
                   Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+                  Adafruit_BMP280::STANDBY_MS_63); /* Standby time. */
 
   AHRSfilter.begin(predictRate);
-
-  x.Fill(0);
-  p.Fill(0);
-  b.Fill(0);
 
   cosInitialLat = cos(cosInitialLat*DEG2RAD);
 }
 
 void loop() {
   if (chronoFilter.hasPassed(microsPerFilter,true)) {
-    predictKalman();
+    readPredictSensors();
+
+    // Serial.println(deltaTime);
+
+    // update F matrix
+    Filter.f(0,3) = deltaTime;
+    Filter.f(1,4) = deltaTime;
+    Filter.f(2,5) = deltaTime;
+
+    // update B matrix
+    Filter.b(0,0) = 0.5*pow(deltaTime,2);
+    Filter.b(1,1) = Filter.b(0,0);
+    Filter.b(2,2) = Filter.b(0,0);
+    Filter.b(3,0) = deltaTime;
+    Filter.b(4,1) = deltaTime;
+    Filter.b(5,2) = deltaTime;
+
+    u = {1.0,0.0,0.0};
+
+    Filter.predict(u);
   }
-  if (chronoUpdate.hasPassed(microsPerUpdate,true)) {
-    if (newGPSData) {
-      updateKalmanGPS();
-      newGPSData = false;
-      GPSLock = 1;  
-    }
-    else {
-      GPSLock = 0;
-      newGPSData = false;
-    }
-    updateKalmanBaro();
+  if (chronoUpdateBaro.hasPassed(microsPerBaroUpdate,true)) {
+    getBaroObservations();
+    Filter.updateBaro(zBaro, 1.0);
   }
-  if (chronoDebug.hasPassed(microsPerDebug,true)) {
-    // Predict debugging
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) ); // Position State
-    Serial.println( String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) ); // Velocity State
-    // Serial.println( String(x(0),2) + "," + String(x(1),2) + "," + String(x(2),2) + "," + String(x(3),2) + "," + String(x(4),2)+ "," + String(x(5),2) + "," + String(GPSLock) );
-    // Serial.println(String(filter.getRoll(),2) + "," + String(filter.getPitch(),2) + "," + String(filter.getYaw(),2) ); // AHRS
-    // Serial.println( String(u(0),2) + "," + String(u(1),2) + "," + String(u(2),2)); // Accelerometer Readings
-    // Serial.println(zBaro(0)); // Barometer Reading
-    // Serial.println( String(zGPS(0),2) + "," + String(zGPS(1),2)+ "," + String(zGPS(2),2) ); // GPS Readings
-    // Serial.println( String(zBaro(0),2) + "," + String(zGPS(2),2) ); // Compare GPS and Barometer altitudes
-    // Serial.println( String(p(0,0),2) + "," + String(p(1,1),2) + "," + String(p(2,2),2) + "," + String(p(3,3),2) + "," + String(p(4,4),2) + "," + String(p(5,5),2) );
-    // Serial.println( String(q(1,1),2) );
+  if (chronoUpdateGPS.hasPassed(microsPerGPSUpdate,true)) {
+    if (newGPSData){
+      getGPSObservations();
+      Filter.updateGPS(zGPS, GPS.HDOP, GPS.VDOP);
+      newGPSData = false;
+    }
+
+  }
+  if (chronoDebug.hasPassed(microsPerDebug,true)){
+    // Serial.println( String(accRPY(0)) + " " + String(accRPY(1)) + " " + String(accRPY(2)) + " " + String(magnitudeAccRPY) + " " + String(accNED(0)) + " " + String(accNED(1)) + " " + String(accNED(2)) + " " + String(magnitudeAccNED)  + " " + String(u(0)) + " " +String(u(1)) + " " +String(u(2)) + " " + String(magnitudeU) + " " + String(AHRSfilter.getRoll(),2) + " " + String(AHRSfilter.getPitch(),2) + " " +String(AHRSfilter.getYaw(),2));
+    // Serial.println( String(Filter.x(0),2) + "," + String(Filter.x(1),2) + "," + String(Filter.x(2),2) ); // Position State
+    // Serial.println( zGPS ); // GPS Readings
+    // Serial.println(newGPSData);
+    // Serial.println( String(Filter.x(3),2) + "," + String(Filter.x(4),2) + "," + String(Filter.x(5),2) ); // Velocity State
+    // Serial.println(deltaTime);
+    // Serial.println(Filter.x);
+    // Serial.println(newGPSData);
   }
   if (HWSerial.available()) {
-    char c = GPS.read();
+    GPS.read();
     if(GPS.newNMEAreceived()) {
       newGPSData = true;
     }
@@ -151,76 +168,30 @@ void loop() {
   }
 }
 
-void predictKalman() {
+void readPredictSensors(){
   // read raw data from IMU into RPY coordinate system
   MPU.accelUpdate();
   MPU.gyroUpdate();  
   MPU.magUpdate();
-
-  // Convert to Body Coordinates and correct units
-  aR = MPU.accelY()*Gs2SI; // ROLL
-  aP = MPU.accelX()*Gs2SI; // PITCH
-  aY = -MPU.accelZ()*Gs2SI;// YAW
-  gR = MPU.gyroY();
-  gP = MPU.gyroX();
-  gY = -MPU.gyroZ();
-  mR = -MPU.magX();
-  mP = -MPU.magY();
-  mY = -MPU.magZ();
-  
+  accRPY  = {MPU.accelY()*Gs2SI, MPU.accelX()*Gs2SI, -MPU.accelZ()*Gs2SI}; // combined gravity and acceleration
+  gyroRPY = {MPU.gyroY(),        MPU.gyroX(),        -MPU.gyroZ()       };
+  magRPY  = {-MPU.magX(),       -MPU.magY(),         -MPU.magZ()        };
   // update the Madgwick filter, which computes orientation
-  AHRSfilter.update(-gR, -gP, -gY, aR, aP, aY, mR, mP, mY);
-
-  accRPY(0) = aR;
-  accRPY(1) = aP;
-  accRPY(2) = aY;
-
-  BLA::Matrix<4,1,double> q_AHRS;
-  q_AHRS(0) = (double) AHRSfilter.q0;
-  q_AHRS(1) = (double) AHRSfilter.q1;
-  q_AHRS(2) = (double) AHRSfilter.q2;
-  q_AHRS(3) = (double) AHRSfilter.q3;
+  AHRSfilter.update(-gyroRPY(0), -gyroRPY(1), -gyroRPY(2), accRPY(0), accRPY(1), accRPY(2), magRPY(0), magRPY(1), magRPY(2));
+  BLA::Matrix<4,1,double> q_AHRS = { (double) AHRSfilter.q0,
+                                     (double) AHRSfilter.q1,
+                                     (double) AHRSfilter.q2,
+                                     (double) AHRSfilter.q3 };
+                                     
   Quaternion RPYtoNED(q_AHRS);
   Quaternion NEDtoRPY(RPYtoNED.Inverse());
-  
-  gRPY = NEDtoRPY.Rotate(gNED);
-  accRPY -= gRPY;
-  u = RPYtoNED.Rotate(accRPY);
- 
-  // update F matrix
-  f(0,3) = deltaTime;
-  f(1,4) = deltaTime;
-  f(2,5) = deltaTime;
 
-  // update B matrix
-  b(0,0) = 0.5*pow(deltaTime,2);
-  b(1,1) = b(0,0);
-  b(2,2) = b(0,0);
-  b(3,0) = deltaTime;
-  b(4,1) = deltaTime;
-  b(5,2) = deltaTime;
-
-  x = f*x + b*u;
-  p = f*p*~f + q;
+  accNED = RPYtoNED.Rotate(accRPY);
+  u = accNED - gNED;
 }
 
 void getBaroObservations() {
-  zBaro(0) = -BMP.readAltitude(localAirPressure);
-}
-
-void updateKalmanBaro() {
-  getBaroObservations();
-  BLA::Matrix<NUM_OBS_BARO, NUM_STATES, double > h = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
-  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, double > r = {1.0};
-  BLA::Matrix<NUM_STATES, NUM_OBS_BARO, double > k;
-  BLA::Matrix<NUM_OBS_BARO, NUM_OBS_BARO, double > temp;
-  BLA::Matrix<NUM_STATES, NUM_STATES,double > temp2;
-
-  temp = h*p*~h + r;
-  k = p*~h*Inverse(temp);
-  x += k*(zBaro - h*x);
-  temp2 = I - k*h;
-  p = temp2*p*~temp2 + k*r*~k;
+  zBaro(0) = BMP.readAltitude(localAirPressure);
 }
 
 void getGPSObservations() {
@@ -230,23 +201,8 @@ void getGPSObservations() {
   zGPS(0) = radiusEarth*dlon*DEG2RAD*cosInitialLat; // E in NED
   zGPS(1) = radiusEarth*dlat*DEG2RAD; // N in NED
   zGPS(2) = (double) GPS.altitude;
+
+  // Serial.println( zGPS ); // GPS Readings
 }
 
-void updateKalmanGPS() {
-  getGPSObservations();
-  BLA::Matrix< NUM_OBS_GPS, NUM_STATES, double > h = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                                      0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-                                                      0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
-  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, double > r = {3.24, 0.00, 0.00,
-                                                      0.00, 3.24, 0.00,
-                                                      0.00, 0.00, 11.4};
-  BLA::Matrix<NUM_STATES, NUM_OBS_GPS, double > k;
-  BLA::Matrix<NUM_OBS_GPS, NUM_OBS_GPS, double > temp;
-  BLA::Matrix<NUM_STATES, NUM_STATES, double > temp2;
 
-  temp = h*p*~h + r;
-  k = p*~h*Inverse(temp);
-  x += k*(zGPS - h*x);
-  temp2 = I - k*h;
-  p = temp2*p*~temp2 + k*r*~k;
-}
